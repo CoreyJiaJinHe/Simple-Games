@@ -77,10 +77,13 @@ class Player():
     def __init__(self,name, isBot=True):
         self.name=name
         self.hand=[]
+        self.table=[]
         self.wallet=1000
         self.bet=0
         self.current_bet=0
         self.isBot=isBot
+        self.risk_tolerance=random.choice(["low","medium","high"])
+        self.isFolded=False
         
     def request_card(self, dealer):
         card = dealer.deal_card()
@@ -98,15 +101,37 @@ class Player():
         
     def win_bet(self,amount):
         self.wallet += amount
-        self.bet = 0
-        self.current_bet = 0
-    
-    def lose_bet(self):
-        self.bet = 0
-        self.current_bet = 0
+        print(f"{self.name} wins {amount}! New wallet balance: {self.wallet}")
+        self.reset()
+    def reset(self):
+        self.hand=[]
+        self.table=[]
+        self.bet=0
+        self.current_bet=0
+        self.isFolded=False
+        self.isAllIn=False
         
+    def lose_bet(self):
+        self.reset()
+    
+    def add_to_bet(self, amount):
+        if self.add_bet(amount):
+            self.current_bet += amount
+            print(f"{self.name} has increased their bet by {amount}. Current bet: {self.current_bet}. Remaining funds: {self.wallet}")
+        else:
+            print(f"{self.name} could not increase their bet by {amount} due to insufficient funds.")
+            
     def set_bet(self, minimum_bet):
         if not self.isBot:
+            if (self.wallet <=0):
+                print(f"{self.name} has no funds left to bet. Skipping turn.")
+                return
+            if (minimum_bet > self.wallet):
+                minimum_bet = self.wallet
+                print (f"{self.name} is going all-in with {minimum_bet}.")
+                self.add_bet(minimum_bet)
+                return
+            
             input_amount = input(f"{self.name}, enter your bet amount (Available funds: {self.wallet}): ")
             try:
                 amount = int(input_amount)
@@ -119,18 +144,71 @@ class Player():
                 print("Invalid input. Please enter a numeric value.")
                 self.set_bet(minimum_bet)
         else:
-            # Simple bot logic: bet a random amount between minimum and 100
-            amount = random.randint(minimum_bet, min(100, self.wallet))
-            #amount =50
-            self.add_bet(amount)
-            print(f"{self.name} (Bot) has placed a bet of {amount}. Remaining funds: {self.wallet}")
+            if self.wallet <=0:
+                print(f"{self.name} (Bot) has no funds left to bet. Skipping turn.")
+                return
+            if self.isFolded:
+                print(f"{self.name} (Bot) has already folded. Skipping turn.")
+                return
+            self.determine_maximum_bet()
+            maximum_bet = self.maximum_bet
+            if (minimum_bet > self.wallet):
+                minimum_bet = self.wallet
+                print (f"{self.name} (Bot) is going all-in with {minimum_bet}.")
+                self.add_bet(minimum_bet)
+                return
+            else:
+                #If the minimum bet is higher than the maximum bet, but not by too much, set max to min
+                #and allow the bot to bet
+                if (minimum_bet > maximum_bet and minimum_bet*1.5 < maximum_bet):
+                    maximum_bet = minimum_bet
+                    amount = random.randint(minimum_bet, min(int(maximum_bet * 100), self.wallet))
+                    self.add_bet(amount)
+                    print(f"{self.name} (Bot) has placed a bet of {amount}. Remaining funds: {self.wallet}")
+                else:
+                    if (maximum_bet < minimum_bet):
+                        print(f"{self.name} (Bot) decides to fold as the minimum bet {minimum_bet} exceeds its maximum willingness to bet {maximum_bet}.")
+                        self.isFolded=True
+                        return
+                    amount = random.randint(minimum_bet, min(int(maximum_bet * 100), self.wallet))
+                    self.add_bet(amount)
+                    print(f"{self.name} (Bot) has placed a bet of {amount}. Remaining funds: {self.wallet}")
+    def determine_maximum_bet(self):
+        self.maximum_bet=100*self.bot_assess_risk(self) + 100* self.bot_assess_hand_strength(self.hand, self.table)
+        # Risk | Hand Strength Category         | Strength | Calc                        | max_bet
+        # -----|-------------------------------|----------|-----------------------------|---------
+        # 0.2  | High Card                     | 0.5      | 100*0.2 + 100*0.5           | 70
+        # 0.2  | Pair or Two Pair              | 1        | 100*0.2 + 100*1             | 120
+        # 0.2  | Three of a Kind to Straight   | 1.5      | 100*0.2 + 100*1.5           | 170
+        # 0.2  | Full House or better          | 3.0      | 100*0.2 + 100*3.0           | 320
+        # 0.5  | High Card                     | 0.5      | 100*0.5 + 100*0.5           | 100
+        # 0.5  | Pair or Two Pair              | 1        | 100*0.5 + 100*1             | 150
+        # 0.5  | Three of a Kind to Straight   | 1.5      | 100*0.5 + 100*1.5           | 200
+        # 0.5  | Full House or better          | 3.0      | 100*0.5 + 100*3.0           | 350
+        # 1    | High Card                     | 0.5      | 100*1 + 100*0.5             | 150
+        # 1    | Pair or Two Pair              | 1        | 100*1 + 100*1               | 200
+        # 1    | Three of a Kind to Straight   | 1.5      | 100*1 + 100*1.5             | 250
+        # 1    | Full House or better          | 3.0      | 100*1 + 100*3.0             | 400
+    def bot_assess_risk(self, bot):
+        if bot.risk_tolerance == "low":
+            return 0.2
+        elif bot.risk_tolerance == "medium":
+            return 0.5
+        else:  # high risk tolerance
+            return 1
     
-    def add_to_bet(self, amount):
-        if self.add_bet(amount):
-            self.current_bet += amount
-            print(f"{self.name} has increased their bet by {amount}. Current bet: {self.current_bet}. Remaining funds: {self.wallet}")
-        else:
-            print(f"{self.name} could not increase their bet by {amount} due to insufficient funds.")
+    def bot_assess_hand_strength(self, hand, dealt):
+        evaluater = Poker([])
+        rank, result, name = evaluater.evaluate_hand(hand, dealt)
+        if rank >= 7:  # Full House or better
+            return 3.0
+        elif rank >= 4:  # Three of a Kind to Straight
+            return 1.5
+        elif rank >= 2:  # Pair to Two Pair
+            return 1
+        else:  # High Card
+            return 0.5
+
 
 class Poker():
     def __init__ (self, player_names):
@@ -181,8 +259,21 @@ class Poker():
         start = self.player_nodes[0]
         node = start
         last_raiser = None
+        
+        # Check if there is more than one active player
+        active_players = [n for n in self.player_nodes if not n.player.isFolded and n.player.wallet > 0]
+        if len(active_players) < 2:
+            print("No betting needed: only one player remains.")
+            return
+        
         while True:
             player = node.player
+            if player.isFolded or player.wallet <= 0:
+                node = node.next
+                if node == start:
+                    break
+                continue
+            
             to_call = current_bet - player.current_bet
             # Only ask to bet if player has not matched current bet
             if player.wallet > 0 and player.current_bet < current_bet or last_raiser == node:
@@ -215,8 +306,6 @@ class Poker():
         
         self.betting_round()
         
-        
-        
         flop = self.deal_flop()
         print(f"Flop: {show_substituted(flop)}")
         self.dealt = flop.copy()
@@ -245,101 +334,42 @@ class Poker():
         winner= None
         highest_rank=0
         winning_hand=[]
+        players = [p for p in players if not p.isFolded]
         for player in players:
-            hand=player.hand
-            print(f"Evaluating hand for {player.name}: {show_substituted(hand)}")
-            check, result= self.check_royal_flush(hand, dealt)
-            if check:
-                print(f"{player.name} has a Royal Flush!")
-                rank=10
-                if rank>highest_rank:
-                    highest_rank=rank
-                    winner=player
-                    winning_hand=result
-                continue
-            check, result= self.check_straight_flush(hand, dealt)
-            if check:
-                print(f"{player.name} has a Straight Flush!")
-                rank=9
-                if rank>highest_rank:
-                    highest_rank=rank
-                    winner=player
-                    winning_hand=result
-                continue
-            check, result= self.check_four_of_a_kind(hand, dealt)
-            if check:
-                print(f"{player.name} has Four of a Kind!")
-                rank=8
-                if rank>highest_rank:
-                    highest_rank=rank
-                    winner=player
-                    winning_hand=result
-                continue
-            check, result= self.check_full_house(hand, dealt)
-            if check:
-                print(f"{player.name} has a Full House!")
-                rank=7
-                if rank>highest_rank:
-                    highest_rank=rank
-                    winner=player
-                    winning_hand=result
-                continue
-            check, result= self.check_flush(hand, dealt)
-            if check:
-                print(f"{player.name} has a Flush!")
-                rank=6
-                if rank>highest_rank:
-                    highest_rank=rank
-                    winner=player
-                    winning_hand=result
-                continue
-            check, result= self.check_straight(hand, dealt)
-            if check:
-                print(f"{player.name} has a Straight!")
-                rank=5
-                if rank>highest_rank:
-                    highest_rank=rank
-                    winner=player
-                    winning_hand=result
-                continue
-            check, result= self.check_three_of_a_kind(hand, dealt)
-            if check:
-                print(f"{player.name} has Three of a Kind!")
-                rank=4
-                if rank>highest_rank:
-                    highest_rank=rank
-                    winner=player
-                    winning_hand=result
-                continue
-            check, result= self.check_two_pair(hand, dealt)
-            if check:
-                print(f"{player.name} has Two Pair!")
-                rank=3
-                if rank>highest_rank:
-                    highest_rank=rank
-                    winner=player
-                    winning_hand=result
-                continue
-            check, result= self.check_single_pair(hand, dealt)
-            if check:
-                print(f"{player.name} has a Pair!")
-                rank=2
-                if rank>highest_rank:
-                    highest_rank=rank
-                    winner=player
-                    winning_hand=result
-                continue
-            high_card=self.get_high_card(hand, dealt)
-            rank=1
-            print(f"{player.name} has High Card: {show_substituted(high_card)}")
-            if rank>highest_rank:
-                highest_rank=rank
-                winner=player
-                winning_hand=high_card
-        print(f"The winner is {winner.name} with hand: {winning_hand}")
+            hand = player.hand
+            rank, result, hand_name = self.evaluate_hand(hand, dealt)
+            print(f"{player.name} has {hand_name}: {show_substituted(result)}")
+            if rank > highest_rank:
+                highest_rank = rank
+                winner = player
+                winning_hand = result
+        print(f"The winner is {winner.name} with hand: {show_substituted(winning_hand)}")
+        self.award_player(winner, self.pot)
 
+    def award_player(self,player,bet):
+        player.win_bet(bet)
+
+    def evaluate_hand(self, hand, dealt):
+        checks = [
+                (self.check_royal_flush, 10, "Royal Flush"),
+                (self.check_straight_flush, 9, "Straight Flush"),
+                (self.check_four_of_a_kind, 8, "Four of a Kind"),
+                (self.check_full_house, 7, "Full House"),
+                (self.check_flush, 6, "Flush"),
+                (self.check_straight, 5, "Straight"),
+                (self.check_three_of_a_kind, 4, "Three of a Kind"),
+                (self.check_two_pair, 3, "Two Pair"),
+                (self.check_single_pair, 2, "Pair"),
+            ]
+        for check_func, rank, name in checks:
+            check, result = check_func(hand, dealt)
+            if check:
+                return rank, result, name
+        # If no hand found, return high card
+        high_card = self.get_high_card(hand, dealt)
+        return 1, high_card, "High Card"
+    
     def check_royal_flush(self, hand, dealt):
-        
         temp_hand=hand.copy() + dealt.copy()
         hand = custom_sort(temp_hand)
         royal_flushes = [
@@ -469,7 +499,5 @@ class Poker():
         temp_hand=hand.copy() + dealt.copy()
         temp_hand=custom_sort(temp_hand)
         return temp_hand[-1]
-    
-
 x = Poker(["You", "Bob"])
 x.game_phases()
