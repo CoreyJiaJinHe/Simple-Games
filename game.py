@@ -135,8 +135,9 @@ class Player():
             input_amount = input(f"{self.name}, enter your bet amount (Available funds: {self.wallet}): ")
             try:
                 amount = int(input_amount)
-                if self.add_bet(amount) and amount >= minimum_bet:
+                if amount >= minimum_bet and amount <= self.wallet:
                     print(f"{self.name} has placed a bet of {amount}. Remaining funds: {self.wallet}")
+                    self.add_bet(amount)
                 else:
                     print(f"Invalid bet amount. Please enter a positive number up to {self.wallet}.")
                     self.set_bet(minimum_bet)
@@ -160,19 +161,33 @@ class Player():
             else:
                 #If the minimum bet is higher than the maximum bet, but not by too much, set max to min
                 #and allow the bot to bet
-                if (minimum_bet > maximum_bet and minimum_bet*1.5 < maximum_bet):
-                    maximum_bet = minimum_bet
-                    amount = random.randint(minimum_bet, min(int(maximum_bet * 100), self.wallet))
-                    self.add_bet(amount)
-                    print(f"{self.name} (Bot) has placed a bet of {amount}. Remaining funds: {self.wallet}")
+                #print("DEBUG: Bot Decision One:")
+                if (minimum_bet > maximum_bet):
+                    #print ("DEBUG: Bot Minimum Bet exceeds Maximum Bet")
+                    if (minimum_bet*1.5 <= maximum_bet):
+                        maximum_bet = minimum_bet
+                        amount = random.randint(minimum_bet, min(maximum_bet, self.wallet))
+                        self.add_bet(amount)
+                    else:
+                        # Bluffing chance
+                        randomNumber=random.random()
+                        print(f"Random number for bluff decision: {randomNumber}")
+                        if (randomNumber>0.9):
+                            print(f"{self.name} (Bot) thinks you are bluffing and matches your bet despite the odds.")
+                            amount = minimum_bet
+                            self.add_bet(amount)
+                        else:
+                            print(f"{self.name} (Bot) decides to fold as the minimum bet {minimum_bet} exceeds its maximum willingness to bet {maximum_bet}.")
+                            self.isFolded=True
+                            return
                 else:
-                    if (maximum_bet < minimum_bet):
+                    if (minimum_bet > maximum_bet):
                         print(f"{self.name} (Bot) decides to fold as the minimum bet {minimum_bet} exceeds its maximum willingness to bet {maximum_bet}.")
                         self.isFolded=True
                         return
-                    amount = random.randint(minimum_bet, min(int(maximum_bet * 100), self.wallet))
+                    amount = random.randint(minimum_bet, min(maximum_bet, self.wallet))
                     self.add_bet(amount)
-                    print(f"{self.name} (Bot) has placed a bet of {amount}. Remaining funds: {self.wallet}")
+                print(f"{self.name} (Bot) has placed a bet of {amount}. Remaining funds: {self.wallet}")
     def determine_maximum_bet(self):
         self.maximum_bet=100*self.bot_assess_risk(self) + 100* self.bot_assess_hand_strength(self.hand, self.table)
         # Risk | Hand Strength Category         | Strength | Calc                        | max_bet
@@ -200,6 +215,7 @@ class Player():
     def bot_assess_hand_strength(self, hand, dealt):
         evaluater = Poker([])
         rank, result, name = evaluater.evaluate_hand(hand, dealt)
+        print (f"{self.name} (Bot) assesses its hand as a {name}.")
         if rank >= 7:  # Full House or better
             return 3.0
         elif rank >= 4:  # Three of a Kind to Straight
@@ -249,7 +265,7 @@ class Poker():
         for player in self.players:
             print(f"{player.name}'s hand: {show_substituted(player.hand)}")
     
-    def betting_round(self):
+    def betting_round(self, round):
         print("\n--- Betting Round ---")
         # Reset all current_bet to 0 for this round
         for node in self.player_nodes:
@@ -265,36 +281,32 @@ class Poker():
         if len(active_players) < 2:
             print("No betting needed: only one player remains.")
             return
-        
-        while True:
+        # Track who still needs to act
+        need_to_act = set(active_players)
+        node = active_players[0]
+
+        while need_to_act:
             player = node.player
-            if player.isFolded or player.wallet <= 0:
+            if player.isFolded or player.wallet <= 0 or player.current_bet == current_bet:
+                # This player doesn't need to act
                 node = node.next
-                if node == start:
-                    break
+                if node not in need_to_act and need_to_act:
+                    node = list(need_to_act)[0]
                 continue
-            
+
             to_call = current_bet - player.current_bet
-            # Only ask to bet if player has not matched current bet
-            if player.wallet > 0 and player.current_bet < current_bet or last_raiser == node:
-                player.set_bet(to_call)
-                if player.current_bet > current_bet:
-                    # If raised, all previous players must match
-                    current_bet = player.current_bet
-                    last_raiser = node
-                    # Go back to previous players to let them match
-                    prev = node.prev
-                    while prev != node:
-                        prev_player = prev.player
-                        if prev_player.current_bet < current_bet and prev_player.wallet > 0:
-                            print(f"{prev_player.name} must match the new bet of {current_bet}.")
-                            prev_player.set_bet(current_bet - prev_player.current_bet)
-                        prev = prev.prev
-                        if prev == last_raiser:
-                            break
+            print(f"{player.name}'s turn. Current bet to call: {to_call}. Wallet: {player.wallet}")
+            player.set_bet(to_call)
+            if player.current_bet > current_bet:
+                # Player raised, everyone else needs to act again (except raiser)
+                current_bet = player.current_bet
+                need_to_act = set(n for n in active_players if n.player != player and not n.player.isFolded and n.player.wallet > 0)
+            else:
+                # Player called or folded or is all-in
+                need_to_act.discard(node)
             node = node.next
-            if node == start:
-                break
+            if node not in need_to_act and need_to_act:
+                node = list(need_to_act)[0]
         # Add all bets to pot
         self.pot = sum(node.player.bet for node in self.player_nodes)
         print(f"Total pot is now: {self.pot}\n")
@@ -304,24 +316,24 @@ class Poker():
         self.deal_initial_hands()
         self.show_hands()
         
-        self.betting_round()
+        self.betting_round(1)
         
         flop = self.deal_flop()
         print(f"Flop: {show_substituted(flop)}")
         self.dealt = flop.copy()
         
-        self.betting_round()
+        self.betting_round(2)
         turn = self.deal_turn()
         print(f"Turn: {show_substituted([turn])}")
         self.dealt = self.dealt + [turn]
         
-        self.betting_round()
+        self.betting_round(3)
         river = self.deal_river()
         print(f"River: {show_substituted([river])}")
         
         self.dealt = self.dealt + [river]
         print(f"Dealt cards: {show_substituted(self.dealt)}")
-        self.betting_round()
+        self.betting_round(4)
         
         print("\n--- Determining Winner ---")
         print(f"Dealt cards: {show_substituted(self.dealt)}")
