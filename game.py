@@ -1,6 +1,7 @@
 
 import random
 
+
 cards=[]
 suit=["H", "D", "C", "S"]
 rank = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
@@ -74,11 +75,11 @@ class PlayerNode:
         self.prev = None
 
 class Player():
-    def __init__(self,name, isBot=True):
+    def __init__(self,name, isBot=True, wallet=1000):
         self.name=name
         self.hand=[]
         self.table=[]
-        self.wallet=1000
+        self.wallet=wallet
         self.bet=0
         self.current_bet=0
         self.isBot=isBot
@@ -162,9 +163,9 @@ class Player():
                 #If the minimum bet is higher than the maximum bet, but not by too much, set max to min
                 #and allow the bot to bet
                 #print("DEBUG: Bot Decision One:")
-                if (minimum_bet > maximum_bet):
+                if (minimum_bet > maximum_bet-self.current_bet):
                     #print ("DEBUG: Bot Minimum Bet exceeds Maximum Bet")
-                    if (minimum_bet*1.5 <= maximum_bet):
+                    if (minimum_bet*1.5 <= maximum_bet-self.current_bet):
                         maximum_bet = minimum_bet
                         amount = random.randint(minimum_bet, min(maximum_bet, self.wallet))
                         self.add_bet(amount)
@@ -185,11 +186,18 @@ class Player():
                         print(f"{self.name} (Bot) decides to fold as the minimum bet {minimum_bet} exceeds its maximum willingness to bet {maximum_bet}.")
                         self.isFolded=True
                         return
-                    amount = random.randint(minimum_bet, min(maximum_bet, self.wallet))
+                    if (self.risk_tolerance=="low" and self.current_bet >= maximum_bet*0.5):
+                        amount = minimum_bet
+                        print (f"{self.name} (Bot) has called. Remaining funds: {self.wallet}")
+                    elif (self.risk_tolerance=="medium" and self.current_bet >= maximum_bet*0.7):
+                        amount = random.randint(minimum_bet, int(maximum_bet*0.7))
+                        print(f"{self.name} (Bot) has placed a bet of {amount}. Remaining funds: {self.wallet}")
+                    else:
+                        amount = random.randint(minimum_bet, min(maximum_bet, self.wallet))
+                        print(f"{self.name} (Bot) has placed a bet of {amount}. Remaining funds: {self.wallet}")
                     self.add_bet(amount)
-                print(f"{self.name} (Bot) has placed a bet of {amount}. Remaining funds: {self.wallet}")
     def determine_maximum_bet(self):
-        self.maximum_bet=100*self.bot_assess_risk(self) + 100* self.bot_assess_hand_strength(self.hand, self.table)
+        self.maximum_bet=int(100*self.bot_assess_risk(self) + 100* self.bot_assess_hand_strength(self.hand, self.table))
         # Risk | Hand Strength Category         | Strength | Calc                        | max_bet
         # -----|-------------------------------|----------|-----------------------------|---------
         # 0.2  | High Card                     | 0.5      | 100*0.2 + 100*0.5           | 70
@@ -225,11 +233,46 @@ class Player():
         else:  # High Card
             return 0.5
 
+import database
+class Database_Helper():
+    def __init__(self):
+        self.db = database.gameDatabase()
+        self.players =self.retrieve_list_of_players()
+    def log_game(self, game_type, players, winner, pot):
+        self.db.log_game(game_type, players, winner, pot)
+        print(f"{game_type} Game logged to database.")
+    def retrieve_player_wallet(self, player_name):
+        player=self.db.get_player(player_name)
+        print(player)
+    
+    def retrieve_list_of_players(self):
+        return self.db.get_players()
+    
+    def add_player(self, player_name):
+        self.db.add_player(player_name)
+        print(f"Player {player_name} added to database.")
+    
+    def update_player_stats(self, player_name, wallet_change, won_game, winnings):
+        self.db.update_player_stats(player_name, wallet_change, won_game, winnings)
+        print(f"Player {player_name} stats updated.")
+    
+    def update_player_wallet(self, player_name, amount):
+        if (player_name in self.players):
+            self.db.update_player_wallet(player_name, amount)
+        else:
+            #print(f"Player {player_name} not found in database.")
+            return
+        
+    
+# x = Database_Helper()
+# x.add_player("Dev")
+# x.retrieve_player_wallet("Dev")
+    
 
 class Poker():
     def __init__ (self, player_names):
         self.dealer = Dealer()
-        self.players = [Player(name, isBot=(name!="You")) for name in player_names]
+        self.players = [Player(name, isBot=(i != 0)) for i, name in enumerate(player_names)]
         
         # Create circular linked list of players
         self.player_nodes = [PlayerNode(p) for p in self.players]
@@ -241,6 +284,9 @@ class Poker():
         self.dealt = []
         self.pot = 0
         self.minimum_bet = 10
+        
+        self.db_helper= Database_Helper()
+        
     def deal_initial_hands(self):
         for _ in range(2):  # Deal 2 cards to each player
             for player in self.players:
@@ -288,7 +334,7 @@ class Poker():
         while need_to_act:
             player = node.player
             if player.isFolded or player.wallet <= 0 or player.current_bet == current_bet:
-                # This player doesn't need to act
+                need_to_act.discard(node)
                 node = node.next
                 if node not in need_to_act and need_to_act:
                     node = list(need_to_act)[0]
@@ -296,14 +342,25 @@ class Poker():
 
             to_call = current_bet - player.current_bet
             print(f"{player.name}'s turn. Current bet to call: {to_call}. Wallet: {player.wallet}")
+            
+            wallet_before = player.wallet
+            # Pass to_call to set_bet, and make sure set_bet only allows betting at least to_call
             player.set_bet(to_call)
-            if player.current_bet > current_bet:
-                # Player raised, everyone else needs to act again (except raiser)
+            wallet_after = player.wallet
+            delta = wallet_after - wallet_before
+            self.db_helper.update_player_wallet(player.name, delta)
+
+            # If player folded, remove from need_to_act
+            if player.isFolded:
+                need_to_act.discard(node)
+            elif player.current_bet > current_bet:
+                # Player raised, update current_bet and reset need_to_act for all others
                 current_bet = player.current_bet
                 need_to_act = set(n for n in active_players if n.player != player and not n.player.isFolded and n.player.wallet > 0)
             else:
-                # Player called or folded or is all-in
+                # Player called or is all-in
                 need_to_act.discard(node)
+                
             node = node.next
             if node not in need_to_act and need_to_act:
                 node = list(need_to_act)[0]
@@ -312,7 +369,7 @@ class Poker():
         print(f"Total pot is now: {self.pot}\n")
         
     
-    def game_phases(self):
+    def start_game_phases(self):
         self.deal_initial_hands()
         self.show_hands()
         
@@ -357,6 +414,9 @@ class Poker():
                 winning_hand = result
         print(f"The winner is {winner.name} with hand: {show_substituted(winning_hand)}")
         self.award_player(winner, self.pot)
+        self.db_helper.log_game("Poker", ', '.join([p.name for p in players]), winner.name, self.pot)
+        self.db_helper.update_player_stats(winner.name, self.pot, True, self.pot)
+        
 
     def award_player(self,player,bet):
         player.win_bet(bet)
@@ -487,7 +547,6 @@ class Poker():
         return False, []
     
     def check_full_house(self,hand,dealt):
-        
         threeCheck, threeCard=self.check_three_of_a_kind(hand, dealt)
         pairCheck, pairCards=self.check_single_pair(hand, dealt)
         if (threeCheck and pairCheck):
@@ -511,5 +570,30 @@ class Poker():
         temp_hand=hand.copy() + dealt.copy()
         temp_hand=custom_sort(temp_hand)
         return temp_hand[-1]
-x = Poker(["You", "Bob"])
-x.game_phases()
+
+    
+def game_start():
+    print("Starting Poker Game...")
+    print("Please enter your name:")
+    override=True
+    if override:
+        player_name="Dev"
+    else:
+        player_name = input()
+    print("Welcome, " + player_name + "!")
+    print("How many players (including you) will be playing? (2-6)")
+    num_players_input = input()
+    try:
+        num_players = int(num_players_input)
+        if num_players < 2 or num_players > 6:
+            print("Invalid number of players. Defaulting to 2 players.")
+            num_players = 2
+    except ValueError:
+        print("Invalid input. Defaulting to 2 players.")
+        num_players = 2
+
+    poker_game = Poker([player_name] + [f"Bot{i}" for i in range(1, num_players)])
+    poker_game.start_game_phases()
+
+if __name__ == "__main__":
+    game_start()

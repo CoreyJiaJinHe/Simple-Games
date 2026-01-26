@@ -1,40 +1,65 @@
 import sqlite3
 
-def initialize_database():
-    conn=sqlite3.connect('cardgames.db')
-    cursor=conn.cursor()
-    cursor.execute('''
-                   CREATE TABLE IF NOT EXISTS players (
-                       id INTEGER PRIMARY KEY AUTOINCREMENT,
-                       username TEXT UNIQUE,
-                       wallet INTEGER
-                       games_played INTEGER,
-                       games_won INTEGER,
-                       WINNINGS_TOTAL INTEGER
-                   )''')
-    
-    conn.commit()
-    conn.close()
-    
-###initialize_database()
+
 class gameDatabase:
     def __init__(self):
-        self.conn=sqlite3.connect('cardgames.db')
-        self.cursor=self.conn.cursor()
-    
+        try:
+            self.conn=sqlite3.connect('cardgames.db')
+            self.cursor=self.conn.cursor()
+        except sqlite3.Error as e:
+            print(f"Database connection error: {e}")
+            
     def close(self):
         self.conn.close()
     
     
+    def initialize_database(self):
+        def create_player_table(self):
+            self.cursor.execute('''
+                        CREATE TABLE IF NOT EXISTS players (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            username TEXT UNIQUE,
+                            wallet INTEGER, 
+                            games_played INTEGER,
+                            games_won INTEGER,
+                            WINNINGS_TOTAL INTEGER
+                        )''')
+            self.conn.commit()
+        def create_game_table(self):
+            self.cursor.execute('''
+                                CREATE TABLE IF NOT EXISTS games (
+                                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    game_type TEXT,
+                                    players TEXT,
+                                    winner TEXT,
+                                    pot INTEGER,
+                                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                                )''')
+            self.conn.commit()
+        create_player_table(self)
+        create_game_table(self)
+            
+    
     def get_player(self, username):
         self.cursor.execute('SELECT * FROM players WHERE username=?', (username,))
         player=self.cursor.fetchone()
+        if not player:
+            print("Player not found in database.")
         return player
+    
+    def get_players(self):
+        self.cursor.execute('SELECT username FROM players')
+        players=self.cursor.fetchall()
+        return [player[0] for player in players]
 
     def add_player(self, username):
-        self.cursor.execute('''INSERT INTO players (username, wallet, games_played, games_won, WINNINGS_TOTAL) 
+        try:
+            self.cursor.execute('''INSERT INTO players (username, wallet, games_played, games_won, WINNINGS_TOTAL) 
                     VALUES (?, ?, 0, 0, 0)''', (username, 1000))
-        self.conn.commit()
+            self.conn.commit()
+        except sqlite3.IntegrityError:
+            print(f"Player with username '{username}' already exists.")
+    
     def update_player_stats(self, username, wallet_change, won_game, winnings):
         self.cursor.execute('SELECT wallet, games_played, games_won, WINNINGS_TOTAL FROM players WHERE username=?', (username,))
         player=self.cursor.fetchone()
@@ -51,6 +76,16 @@ class gameDatabase:
         else:
             print("Player not found in database.")
     
+    def update_player_wallet(self, username, amount):
+        self.cursor.execute('SELECT wallet FROM players WHERE username=?', (username,))
+        player=self.cursor.fetchone()
+        if player:
+            new_wallet=player[0] + amount
+            self.cursor.execute('UPDATE players SET wallet=? WHERE username=?', (new_wallet, username))
+            self.conn.commit()
+        else:
+            print("Player not found in database.")
+    
     def get_leaderboard(self, limit=10):
         self.cursor.execute('''SELECT username, WINNINGS_TOTAL 
                             FROM players 
@@ -59,3 +94,12 @@ class gameDatabase:
         leaderboard=self.cursor.fetchall()
         return leaderboard
 
+    def log_game(self, game_type, players, winner, pot):
+        self.cursor.execute('''INSERT INTO games (game_type, players, winner, pot) 
+                            VALUES (?, ?, ?, ?)''', 
+                            (game_type, players, winner, pot))
+        self.conn.commit()
+    
+def __main__():
+    db=gameDatabase()
+    db.initialize_database()
