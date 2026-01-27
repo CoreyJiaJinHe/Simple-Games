@@ -38,7 +38,17 @@ class gameDatabase:
             self.conn.commit()
         create_player_table(self)
         create_game_table(self)
-            
+    def debug_show_tables_and_columns(self):
+        print("Tables and columns in the database:")
+        self.cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        tables = self.cursor.fetchall()
+        for table in tables:
+            table_name = table[0]
+            print(f"\nTable: {table_name}")
+            self.cursor.execute(f"PRAGMA table_info({table_name});")
+            columns = self.cursor.fetchall()
+            for col in columns:
+                print(f"  {col[1]} ({col[2]})")
     
     def get_player(self, username):
         self.cursor.execute('SELECT * FROM players WHERE username=?', (username,))
@@ -103,3 +113,7 @@ class gameDatabase:
 def __main__():
     db=gameDatabase()
     db.initialize_database()
+    db.debug_show_tables_and_columns()
+
+if __name__ == "__main__":
+    __main__()
