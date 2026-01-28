@@ -105,6 +105,7 @@ class Player():
         self.wallet += amount
         print(f"{self.name} wins {amount}! New wallet balance: {self.wallet}")
         self.reset()
+        
     def reset(self):
         self.hand=[]
         self.table=[]
@@ -149,7 +150,7 @@ class Player():
             except ValueError:
                 print("Invalid input. Please enter a numeric value.")
                 self.set_bet(minimum_bet)
-        else:
+        else: #THIS BOT ALGORITHM FOR BETS NEEDS UPDATING. ITS A PIECE OF GARBAGE RIGHT NOW.
             if self.wallet <=0:
                 print(f"{self.name} (Bot) has no funds left to bet. Skipping turn.")
                 return
@@ -157,8 +158,15 @@ class Player():
                 print(f"{self.name} (Bot) has already folded. Skipping turn.")
                 return
             self.determine_maximum_bet()
-            maximum_bet = self.maximum_bet
-            if (minimum_bet > self.wallet):
+            if (minimum_bet == 0):
+                hand_strength=self.bot_assess_hand_strength(self.hand, self.table)
+                if (hand_strength<1):
+                    print (f"{self.name} (Bot) decides to check.")
+                    self.add_bet(minimum_bet)
+                    return
+                else:
+                    minimum_bet = random.randint(10, min(50, self.wallet))
+            elif (minimum_bet > self.wallet):
                 minimum_bet = self.wallet
                 print (f"{self.name} (Bot) is going all-in with {minimum_bet}.")
                 self.add_bet(minimum_bet)
@@ -167,6 +175,7 @@ class Player():
                 #If the minimum bet is higher than the maximum bet, but not by too much, set max to min
                 #and allow the bot to bet
                 #print("DEBUG: Bot Decision One:")
+                maximum_bet = self.maximum_bet
                 if (minimum_bet > maximum_bet-self.current_bet):
                     #print ("DEBUG: Bot Minimum Bet exceeds Maximum Bet")
                     if (minimum_bet*1.5 <= maximum_bet-self.current_bet):
@@ -178,7 +187,8 @@ class Player():
                         randomNumber=random.random()
                         print(f"Random number for bluff decision: {randomNumber}")
                         if (randomNumber>0.9):
-                            print(f"{self.name} (Bot) thinks you are bluffing and matches your bet despite the odds.")
+                            print(f"{self.name} (Bot) thinks you are bluffing and matches your bet\n" +
+                                  f"despite the odds.")
                             amount = minimum_bet
                             self.add_bet(amount)
                         else:
@@ -245,16 +255,26 @@ class Player():
 
 import database
 class Database_Helper():
+    def requires_player(func):
+        def wrapper(self, player_name, *args, **kwargs):
+            if player_name in self.players:
+                return func(self, player_name, *args, **kwargs)
+            else:
+                return None
+        return wrapper
+
     def __init__(self):
         self.db = database.gameDatabase()
         self.players =self.retrieve_list_of_players()
     def log_game(self, game_type, players, winner, pot):
         self.db.log_game(game_type, players, winner, pot)
         print(f"{game_type} Game logged to database.")
+    
+    
+    @requires_player
     def retrieve_player_wallet(self, player_name):
-        player=self.db.get_player(player_name)
-        print(player)
-        return player[2] if player else None
+        player = self.db.get_player(player_name)
+        return player['wallet'] if player else None
     
     def retrieve_list_of_players(self):
         return self.db.get_players()
@@ -263,17 +283,23 @@ class Database_Helper():
         self.db.add_player(player_name)
         print(f"Player {player_name} added to database.")
     
+    
+    @requires_player
     def update_player_stats(self, player_name, wallet_change, won_game, winnings):
         self.db.update_player_stats(player_name, wallet_change, won_game, winnings)
-        print(f"Player {player_name} stats updated.")
-    
+
+    @requires_player
     def update_player_wallet(self, player_name, amount):
-        if (player_name in self.players):
-            self.db.update_player_wallet(player_name, amount)
-        else:
-            #print(f"Player {player_name} not found in database.")
-            return
-        
+        self.db.update_player_wallet(player_name, amount)
+
+    @requires_player
+    def player_take_loan(self, player_name):
+        self.db.player_take_loan(player_name)
+
+    @requires_player
+    def get_player_debt(self, player_name):
+        player = self.db.get_player(player_name)
+        return player['debt'] if player else None
     
 # x = Database_Helper()
 # x.add_player("Dev")
@@ -290,8 +316,13 @@ class Poker_for_GUI():
         
         wallet = self.db_helper.retrieve_player_wallet(player_names[0])
         override = True
-        if wallet is None or override:
-            wallet = 1000  # Default if not found
+        if override:
+            wallet = 1000
+        elif wallet is None:
+            wallet = 1000 #Default
+        elif wallet <= 0:
+            self.db_helper.player_take_loan(player_names[0])
+
 
         # self.players = [
         #     Player(name, isBot=(i != 0), bet_callback=bet_callback if i == 0 else None)
@@ -310,7 +341,7 @@ class Poker_for_GUI():
         
         self.dealt = []
         self.pot = 0
-        self.minimum_bet = 10
+        self.minimum_bet = 0
         
         
         self.bet_callback = bet_callback
@@ -318,8 +349,6 @@ class Poker_for_GUI():
         self.pot_update_callback = pot_update_callback
         self.bot_bet_update_callback = bot_bet_update_callback
         self.bot_fold_callback = bot_fold_callback
-        
-        
         
         self._betting_iter = None
         self._betting_need_to_act = None
@@ -346,6 +375,31 @@ class Poker_for_GUI():
             self.phase_callback('initial_hands', self.players)
         self.show_only_player_hand()
         self.betting_round(1, self.after_betting_round_1)
+    
+    def play_again(self):
+        self.dealer = Dealer()
+        
+        # Optionally, refresh the user's wallet from the database
+        wallet = self.db_helper.retrieve_player_wallet(self.players[0].name)
+        if wallet is not None:
+            self.players[0].wallet = wallet
+        
+        # Reset all players
+        for player in self.players:
+            player.reset()
+        
+        # Reset player nodes (if you want to keep the same player objects)
+        self.player_nodes = [PlayerNode(p) for p in self.players]
+        n = len(self.player_nodes)
+        for i in range(n):
+            self.player_nodes[i].next = self.player_nodes[(i+1)%n]
+            self.player_nodes[i].prev = self.player_nodes[(i-1)%n]
+
+        self.dealt = []
+        self.pot = 0
+        self.minimum_bet = 0
+        # Start a new game
+        self.start_game()
     
     def after_betting_round_1(self):
         flop=self.deal_flop()
@@ -374,10 +428,11 @@ class Poker_for_GUI():
     def after_betting_round_4(self):
         print("\n--- Determining Winner ---")
         print(f"Dealt cards: {show_substituted(self.dealt)}")
-        self.determine_winner(self.players, self.dealt)
-        if self.phase_callback:
-            self.phase_callback("showdown")
         self.show_hands()
+        if self.phase_callback:
+            #print (self.players)
+            self.phase_callback("showdown", self.players)
+        self.determine_winner(self.players, self.dealt)
     
     def betting_round(self, round_number, done_callback):
         print(f"\n--- Betting Round #{round_number} ---")
@@ -450,7 +505,7 @@ class Poker_for_GUI():
             if self.bet_callback:
                 self._last_human_node = node  # Save for resume
                 self._last_human_bet = player.current_bet  # Save for resume
-                self.bet_callback(player, to_call)
+                self.bet_callback(to_call)
             # Wait for GUI to call resume_betting_round()
     
     def resume_betting_round(self):
@@ -477,9 +532,7 @@ class Poker_for_GUI():
         river = self.dealer.deal_card()
         return river
     
-        
     def determine_winner(self, players, dealt):
-        # Placeholder for winner determination logic
         winner= None
         highest_rank=0
         winning_hand=[]

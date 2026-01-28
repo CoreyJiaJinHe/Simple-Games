@@ -1,10 +1,14 @@
 import sqlite3
 
+class PlayerNotFoundError(Exception):
+    pass
+    print("Player not found in database.")
 
 class gameDatabase:
     def __init__(self):
         try:
             self.conn=sqlite3.connect('cardgames.db')
+            self.conn.row_factory = sqlite3.Row
             self.cursor=self.conn.cursor()
         except sqlite3.Error as e:
             print(f"Database connection error: {e}")
@@ -22,7 +26,9 @@ class gameDatabase:
                             wallet INTEGER, 
                             games_played INTEGER,
                             games_won INTEGER,
-                            WINNINGS_TOTAL INTEGER
+                            WINNINGS_TOTAL INTEGER,
+                            loans_taken INTEGER DEFAULT 0,
+                            debt INTEGER DEFAULT 0
                         )''')
             self.conn.commit()
         def create_game_table(self):
@@ -38,6 +44,24 @@ class gameDatabase:
             self.conn.commit()
         create_player_table(self)
         create_game_table(self)
+        
+    def migrate_player_table(self):
+        # Get current columns
+        self.cursor.execute("PRAGMA table_info(players);")
+        columns = [col[1] for col in self.cursor.fetchall()]
+
+        # Add loans_taken if missing
+        if "loans_taken" not in columns:
+            print("Adding 'loans_taken' column to players table.")
+            self.cursor.execute("ALTER TABLE players ADD COLUMN loans_taken INTEGER DEFAULT 0;")
+            self.conn.commit()
+
+        # Add debt if missing
+        if "debt" not in columns:
+            print("Adding 'debt' column to players table.")
+            self.cursor.execute("ALTER TABLE players ADD COLUMN debt INTEGER DEFAULT 0;")
+            self.conn.commit()
+        
     def debug_show_tables_and_columns(self):
         print("Tables and columns in the database:")
         self.cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
@@ -50,11 +74,39 @@ class gameDatabase:
             for col in columns:
                 print(f"  {col[1]} ({col[2]})")
     
+    def debug_clear_tables(self):
+        print("Clearing all data from players and games tables.")
+        self.cursor.execute("DELETE FROM players;")
+        self.cursor.execute("DELETE FROM games;")
+        self.conn.commit()
+
+    def debug_get_table_data(self):
+        self.cursor.execute("SELECT * FROM players;")
+        players=self.cursor.fetchall()
+        print("Players Table Data:")
+        for player in players:
+            print(dict(player))
+        
+        self.cursor.execute("SELECT * FROM games;")
+        games=self.cursor.fetchall()
+        print("\nGames Table Data:")
+        for game in games:
+            print(dict(game))
+    
+    def debug_get_dev_info(self):
+        self.cursor.execute("SELECT * FROM players WHERE username = ?", ("Dev",))
+        player = self.cursor.fetchone()
+        if player:
+            print("Dev's Player Data:")
+            print(dict(player))
+        else:
+            print("Player 'Dev' not found in the players table.")
+    
     def get_player(self, username):
         self.cursor.execute('SELECT * FROM players WHERE username=?', (username,))
         player=self.cursor.fetchone()
         if not player:
-            print("Player not found in database.")
+            raise PlayerNotFoundError
         return player
     
     def get_players(self):
@@ -74,27 +126,27 @@ class gameDatabase:
         self.cursor.execute('SELECT wallet, games_played, games_won, WINNINGS_TOTAL FROM players WHERE username=?', (username,))
         player=self.cursor.fetchone()
         if player:
-            new_wallet=player[0] + wallet_change
-            new_games_played=player[1] + 1
-            new_games_won=player[2] + (1 if won_game else 0)
-            new_winnings_total=player[3] + winnings
+            new_wallet=player['wallet'] + wallet_change
+            new_games_played=player['games_played'] + 1
+            new_games_won=player['games_won'] + (1 if won_game else 0)
+            new_winnings_total=player['WINNINGS_TOTAL'] + winnings
             self.cursor.execute('''UPDATE players 
                         SET wallet=?, games_played=?, games_won=?, WINNINGS_TOTAL=? 
-                        WHERE username=?''', 
+                        WHERE username=?''',
                         (new_wallet, new_games_played, new_games_won, new_winnings_total, username))
             self.conn.commit()
         else:
-            print("Player not found in database.")
+            raise PlayerNotFoundError
     
     def update_player_wallet(self, username, amount):
         self.cursor.execute('SELECT wallet FROM players WHERE username=?', (username,))
         player=self.cursor.fetchone()
         if player:
-            new_wallet=player[0] + amount
+            new_wallet=player['wallet'] + amount
             self.cursor.execute('UPDATE players SET wallet=? WHERE username=?', (new_wallet, username))
             self.conn.commit()
         else:
-            print("Player not found in database.")
+            raise PlayerNotFoundError
     
     def get_leaderboard(self, limit=10):
         self.cursor.execute('''SELECT username, WINNINGS_TOTAL 
@@ -110,10 +162,19 @@ class gameDatabase:
                             (game_type, players, winner, pot))
         self.conn.commit()
     
+    def player_take_loan(self, username, loan_amount=1000):
+        self.cursor.execute('UPDATE players SET wallet = wallet + ?, debt = debt + ?, loans_taken = loans_taken +1 WHERE username = ?', 
+                            (loan_amount, loan_amount, username))
+        self.conn.commit()
+    
 def __main__():
     db=gameDatabase()
     db.initialize_database()
+    db.migrate_player_table()
     db.debug_show_tables_and_columns()
-
+    playerList=db.get_players()
+    print(playerList)
+    db.debug_get_dev_info()
+    db.debug_get_table_data()
 if __name__ == "__main__":
     __main__()
