@@ -315,7 +315,7 @@ class Poker_for_GUI():
         self.db_helper= Database_Helper()
         
         wallet = self.db_helper.retrieve_player_wallet(player_names[0])
-        override = True
+        override = False
         if override:
             wallet = 1000
         elif wallet is None:
@@ -323,11 +323,6 @@ class Poker_for_GUI():
         elif wallet <= 0:
             self.db_helper.player_take_loan(player_names[0])
 
-
-        # self.players = [
-        #     Player(name, isBot=(i != 0), bet_callback=bet_callback if i == 0 else None)
-        #     for i, name in enumerate(player_names)
-        # ]
         # Create the user player with the correct wallet
         user_player = Player(player_names[0], bet_callback=bet_callback, isBot=False, wallet=wallet)
         bot_players = [Player(f"Bot{i}", isBot=True) for i in range(1, len(player_names))]
@@ -341,7 +336,7 @@ class Poker_for_GUI():
         
         self.dealt = []
         self.pot = 0
-        self.minimum_bet = 0
+        self.minimum_bet = 10
         
         
         self.bet_callback = bet_callback
@@ -397,7 +392,7 @@ class Poker_for_GUI():
 
         self.dealt = []
         self.pot = 0
-        self.minimum_bet = 0
+        self.minimum_bet =10
         # Start a new game
         self.start_game()
     
@@ -407,6 +402,7 @@ class Poker_for_GUI():
         self.dealt=flop.copy()
         if self.phase_callback:
             self.phase_callback('flop', self.dealt)
+        self.minimum_bet=0
         self.betting_round(2, self.after_betting_round_2)
     
     def after_betting_round_2(self):
@@ -471,12 +467,14 @@ class Poker_for_GUI():
 
         node = self._betting_need_to_act.pop(0)
         player = node.player
-
-        if player.isFolded or player.wallet <= 0 or player.current_bet == self._betting_current_bet:
+        if player.isFolded or player.wallet <= 0:
+            self.betting_next()
+            return
+        if self._betting_current_bet > 0 and player.current_bet == self._betting_current_bet:
             self.betting_next()
             return
 
-        to_call = to_call = max(0, self._betting_current_bet - player.current_bet)
+        to_call = max(0, self._betting_current_bet - player.current_bet)
         print(f"{player.name}'s turn. Current bet to call: {to_call}. Wallet: {player.wallet}")
 
         wallet_before = player.wallet

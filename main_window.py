@@ -376,13 +376,13 @@ class GameScreen(QWidget):
         minimum_bet = self.poker_game._betting_current_bet - player.current_bet
         if minimum_bet>player.wallet:
             minimum_bet=player.wallet
-        self.on_bet_submitted(player,minimum_bet)
+        self.on_bet_submitted(minimum_bet)
         
     def check(self):
         player = self.poker_game.players[0]
         minimum_bet = self.poker_game._betting_current_bet - player.current_bet
         if minimum_bet == 0:
-            self.on_bet_submitted(player, 0)
+            self.on_bet_submitted(0)
         else:
             self.bet_error_label.setText("Cannot check, you must call or raise.")
     
@@ -412,7 +412,7 @@ class GameScreen(QWidget):
         if amount > player.wallet:
             self.bet_error_label.setText("You do not have enough funds.")
             return
-        if amount <= 0:
+        if amount < 0:
             self.bet_error_label.setText("Bet must be positive.")
             return
         
