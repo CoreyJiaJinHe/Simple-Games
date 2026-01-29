@@ -98,9 +98,21 @@ class GameScreen(QWidget):
         bet_input_layout = QHBoxLayout()
         bet_input_layout.addWidget(bet_label)
         bet_input_layout.addWidget(self.bet_input)
-        bet_input_widget = QWidget()
-        bet_input_widget.setLayout(bet_input_layout)
+        # bet_input_widget = QWidget()
+        # bet_input_widget.setLayout(bet_input_layout)
 
+        self.bet_error_label = QLabel("")
+        self.bet_error_label.setStyleSheet("color: red;")
+        
+        bet_input_vlayout = QVBoxLayout()
+        bet_input_vlayout.addLayout(bet_input_layout)
+        self.bet_error_label = QLabel("")
+        self.bet_error_label.setStyleSheet("color: red;")
+        bet_input_vlayout.addWidget(self.bet_error_label, alignment=Qt.AlignCenter)
+        bet_input_widget = QWidget()
+        bet_input_widget.setLayout(bet_input_vlayout)
+        
+        
         # --- Player cards ---
         cards_layout = QHBoxLayout()
         cards_layout.setAlignment(Qt.AlignCenter)
@@ -207,15 +219,18 @@ class GameScreen(QWidget):
         cards_and_buttons_widget = QWidget()
         cards_and_buttons_widget.setLayout(cards_and_buttons_layout)
 
+        
+        self.hand_type_label = QLabel("Hand: ")
+        self.hand_type_label.setFont(QFont('Arial', 14))
+        self.hand_type_label.setStyleSheet("color: #222;")
+        layout.addWidget(self.hand_type_label, alignment=Qt.AlignCenter)
+        
+        
         # --- Add to main layout ---
         layout.addWidget(bet_input_widget, alignment=Qt.AlignCenter)
         layout.addWidget(cards_and_buttons_widget, alignment=Qt.AlignCenter)
 
         
-        self.bet_error_label = QLabel("")
-        self.bet_error_label.setStyleSheet("color: red;")
-
-        layout.addLayout(cards_layout)
         self.setLayout(layout)
         
         self.db_helper=DBHelper()
@@ -262,7 +277,18 @@ class GameScreen(QWidget):
         pixmap2 = QPixmap(f"cards_graphic/{card2}.png").scaled(80, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         self.card1_label.setPixmap(pixmap1)
         self.card2_label.setPixmap(pixmap2)
-        
+    
+    def update_hand_type(self):
+        # Get the player's hand and table cards
+        player = self.poker_game.players[0]
+        hand = player.hand
+        table = self.poker_game.dealt
+        # Use Poker_for_GUI's evaluate_hand
+        print (hand, table)
+        hand_type = self.poker_game.evaluate_hand(hand, table)
+        self.hand_type_label.setText(f"Hand: {hand_type}")
+    
+    
     def create_opponent_widget(self, name):
         widget = QWidget()
         vbox = QVBoxLayout()
@@ -338,6 +364,7 @@ class GameScreen(QWidget):
                         bot_hands.append(['card_back', 'card_back'])
                 self.reveal_all_bot_hands(bot_hands)
             #self.reveal_all_bot_hands([player.hand for player in data[1:]])  # Exclude human player
+        self.update_hand_type()
     
     def reveal_all_bot_hands(self, bot_hands):
         """

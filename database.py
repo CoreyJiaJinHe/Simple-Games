@@ -175,6 +175,6 @@ def __main__():
     playerList=db.get_players()
     print(playerList)
     db.debug_get_dev_info()
-    db.debug_get_table_data()
+    #db.debug_get_table_data()
 if __name__ == "__main__":
     __main__()
