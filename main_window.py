@@ -222,7 +222,7 @@ class GameScreen(QWidget):
         
         self.hand_type_label = QLabel("Hand: ")
         self.hand_type_label.setFont(QFont('Arial', 14))
-        self.hand_type_label.setStyleSheet("color: #222;")
+        #self.hand_type_label.setStyleSheet("color: #222;")
         layout.addWidget(self.hand_type_label, alignment=Qt.AlignCenter)
         
         
@@ -285,7 +285,7 @@ class GameScreen(QWidget):
         table = self.poker_game.dealt
         # Use Poker_for_GUI's evaluate_hand
         print (hand, table)
-        hand_type = self.poker_game.evaluate_hand(hand, table)
+        rank, cards, hand_type = self.poker_game.evaluate_hand(hand, table)
         self.hand_type_label.setText(f"Hand: {hand_type}")
     
     
