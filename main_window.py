@@ -1,4 +1,4 @@
-from PyQt5.QtWidgets import QApplication, QInputDialog, QFrame,QSizePolicy, QWidget, QLabel, QPushButton, QVBoxLayout, QStackedWidget, QLineEdit, QHBoxLayout, QGridLayout
+from PyQt5.QtWidgets import QApplication,QMessageBox, QInputDialog, QFrame,QSizePolicy, QWidget, QLabel, QPushButton, QVBoxLayout, QStackedWidget, QLineEdit, QHBoxLayout, QGridLayout
 from PyQt5.QtCore import Qt, QEvent
 from PyQt5.QtGui import QFont, QPixmap, QKeySequence
 from PyQt5.QtWidgets import QShortcut
@@ -33,7 +33,7 @@ class MainWindow(QWidget):
         
         self.stacked_widget = QStackedWidget(self)
         self.welcome_screen = WelcomeScreen(self.show_game_screen)
-        self.game_screen = GameScreen()
+        self.game_screen = GameScreen(parent=self)
 
         self.stacked_widget.addWidget(self.welcome_screen)
         self.stacked_widget.addWidget(self.game_screen)
@@ -41,6 +41,12 @@ class MainWindow(QWidget):
         layout.addWidget(self.stacked_widget)
         self.setLayout(layout)
 
+    def show_welcome_screen(self):
+        self.stacked_widget.setCurrentWidget(self.welcome_screen)
+        # Hide outer frames
+        self.outer_frame.hide()
+        self.middle_frame.hide()
+    
     def show_game_screen(self, player_name, bot_count):
         print(f"Starting game for {player_name} vs {bot_count} bots")
         self.game_screen.set_player_name(player_name)
@@ -60,8 +66,9 @@ class MainWindow(QWidget):
         super().resizeEvent(event)
         
 class GameScreen(QWidget):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.main_window=parent
         layout = QVBoxLayout()
         
         self.bot_count=5
@@ -364,7 +371,35 @@ class GameScreen(QWidget):
                         bot_hands.append(['card_back', 'card_back'])
                 self.reveal_all_bot_hands(bot_hands)
             #self.reveal_all_bot_hands([player.hand for player in data[1:]])  # Exclude human player
+        elif phase == 'winner':
+            winner_name, winning_hand, pot = data
+            self.show_game_result_prompt(winner_name, pot)
+        # Update hand type after each phase
         self.update_hand_type()
+    
+    
+    def show_game_result_prompt(self, winner_name, winnings):
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Game Over")
+        msg.setText(f"{winner_name} wins ${winnings}!\n\nPlay again?")
+        msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        msg.setDefaultButton(QMessageBox.Yes)
+        result = msg.exec_()
+        if result == QMessageBox.Yes:
+            self.reset_bot_cards()
+            self.start_game()
+        else:
+            self.reset_bot_cards()
+            self.close()  # Or self.close() if GameScreen is the main window
+            self.main_window.show_welcome_screen()
+            
+    def reset_bot_cards(self):
+        for bot_widget in self.opponent_widgets:
+            # Find the card labels (assuming they are the 2nd and 3rd QLabel children)
+            card_labels = bot_widget.findChildren(QLabel)[1:3]
+            for card_label in card_labels:
+                card_label.setPixmap(QPixmap("cards_graphic/card_back.png").scaled(40, 60, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            bot_widget.bet_label.setText("Bet: 0")
     
     def reveal_all_bot_hands(self, bot_hands):
         """

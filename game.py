@@ -79,6 +79,7 @@ class Poker_for_GUI(PokerHandEvaluator):
             self.phase_callback('initial_hands', self.players)
         self.show_only_player_hand()
         self.betting_round(1, self.after_betting_round_1)
+        self.dealer.debug_deck()
     
     def play_again(self):
         self.dealer = Dealer()
@@ -261,6 +262,7 @@ class Poker_for_GUI(PokerHandEvaluator):
                 highest_rank = rank
                 winner = player
                 winning_hand = result
+        self.phase_callback("winner", [winner.name,winning_hand,self.pot])
         print(f"The winner is {winner.name} with hand: {show_substituted(winning_hand)}")
         self.award_player(winner, self.pot)
         self.db_helper.log_game("Poker", ', '.join([p.name for p in players]), winner.name, self.pot)

@@ -8,9 +8,11 @@ def util_init():
     cards=init_deck()
 
 def init_deck():
+    cards=[]
     for y in suit:
         for x in rank:
             cards.append(str(x)+y)
+    print (cards)
     return cards
 
 def custom_sort(hand):
@@ -48,3 +50,6 @@ def show_substituted(hand):
         else:
             substituted_hand.append(card)
     return substituted_hand
+
+if __name__ == "__main__":
+    init_deck()
