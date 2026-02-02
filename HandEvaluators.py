@@ -151,3 +151,28 @@ class PokerHandEvaluator():
         temp_hand=hand.copy() + dealt.copy()
         temp_hand=custom_sort(temp_hand)
         return temp_hand[-1]
+
+class BlackjackHandEvaluator():
+    def evaluate_hand(self, hand):
+        values = {'2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9,
+                  '10': 10, 'J': 10, 'Q': 10, 'K': 10, 'A': 11}
+        total = 0
+        aces = 0
+        
+        for card in hand:
+            rank = card[:-1]  # Remove suit
+            total += values[rank]
+            if rank == 'A':
+                aces += 1
+        
+        # Adjust for aces
+        while total > 21 and aces:
+            total -= 10
+            aces -= 1
+        
+        if total == 21 and len(hand) == 2:
+            return "Blackjack", total
+        elif total > 21:
+            return "Bust", total
+        else:
+            return "Continue", total

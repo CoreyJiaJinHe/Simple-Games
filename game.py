@@ -2,7 +2,7 @@
 import random
 from Database_Helper import Database_Helper
 from Dealer import Dealer
-from Poker_Hand_Evaluator import PokerHandEvaluator
+from HandEvaluators import PokerHandEvaluator
 from Player import Player, BotPlayer
 from utils import show_substituted
 
@@ -13,7 +13,7 @@ class PlayerNode:
         self.next = None
         self.prev = None
 
-class Poker_for_GUI(PokerHandEvaluator):
+class Poker_for_GUI():
     def __init__(self, player_names,
                  bet_callback=None,
                  phase_callback=None,
@@ -22,6 +22,7 @@ class Poker_for_GUI(PokerHandEvaluator):
                  bot_fold_callback=None):
         self.dealer = Dealer()
         self.db_helper= Database_Helper()
+        self.evaluator=PokerHandEvaluator()
         
         wallet = self.db_helper.retrieve_player_wallet(player_names[0])
         override = False
@@ -33,8 +34,8 @@ class Poker_for_GUI(PokerHandEvaluator):
             self.db_helper.player_take_loan(player_names[0])
 
         # Create the user player with the correct wallet
-        user_player = Player(player_names[0], bet_callback=bet_callback, isBot=False, wallet=wallet)
-        bot_players = [BotPlayer(f"Bot{i}") for i in range(1, len(player_names))]
+        user_player = Player(player_names[0], bet_callback=bet_callback, wallet=wallet)
+        bot_players = [BotPlayer(f"Bot{i}", game_type="Poker") for i in range(1, len(player_names))]
         self.players = [user_player] + bot_players
         # Create circular linked list of players
         self.player_nodes = [PlayerNode(p) for p in self.players]
@@ -79,7 +80,7 @@ class Poker_for_GUI(PokerHandEvaluator):
             self.phase_callback('initial_hands', self.players)
         self.show_only_player_hand()
         self.betting_round(1, self.after_betting_round_1)
-        self.dealer.debug_deck()
+        #self.dealer.debug_deck()
     
     def play_again(self):
         self.dealer = Dealer()
@@ -256,7 +257,7 @@ class Poker_for_GUI(PokerHandEvaluator):
         players = [p for p in players if not p.isFolded]
         for player in players:
             hand = player.hand
-            rank, result, hand_name = self.evaluate_hand(hand, dealt)
+            rank, result, hand_name = self.evaluator.evaluate_hand(hand, dealt)
             print(f"{player.name} has {hand_name}: {show_substituted(result)}")
             if rank > highest_rank:
                 highest_rank = rank

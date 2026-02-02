@@ -1,21 +1,21 @@
 
 import random
 
-from Poker_Hand_Evaluator import PokerHandEvaluator
+from HandEvaluators import PokerHandEvaluator
+from HandEvaluatorFactory import HandEvaluatorFactory
 class Player():
-    def __init__(self,name, isBot=True, wallet=1000, bet_callback=None):
+    def __init__(self,name, wallet=1000, bet_callback=None):
         self.name=name
         self.hand=[]
         self.table=[]
         self.wallet=wallet
         self.bet=0
         self.current_bet=0
-        self.isBot=isBot
+        self.isBot=False
         self.risk_tolerance=random.choice(["low","medium","high"])
         self.isFolded=False
         self.bet_callback = bet_callback
-        if isBot:
-            self.evaluater = PokerHandEvaluator()
+            
         
     def request_card(self, dealer):
         card = dealer.deal_card()
@@ -82,11 +82,14 @@ class Player():
         
     
 class BotPlayer(Player):
-    def __init__(self, name, wallet=1000):
+    def __init__(self, name, wallet=1000, game_type="Poker"):
         super().__init__(name, wallet)
         self.isBot = True
+        self.game_type=game_type
         self.risk_tolerance = random.choice(["low", "medium", "high"])
-        self.evaluater = PokerHandEvaluator()
+        self.evaluator=None
+        if self.isBot:
+            self.evaluator = HandEvaluatorFactory.get_evaluator(self.game_type)
         
     def set_bet(self, minimum_bet, round_number = None):
     
@@ -220,7 +223,7 @@ class BotPlayer(Player):
     
     
     def bot_assess_hand_strength(self, hand, dealt):
-        rank, result, name = self.evaluater.evaluate_hand(hand, dealt)
+        rank, result, name = self.evaluator.evaluate_hand(hand, dealt)
         print (f"{self.name} (Bot) assesses its hand as a {name}.")
         if rank >= 7:  # Full House or better
             return 3.0

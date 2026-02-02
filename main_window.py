@@ -292,7 +292,7 @@ class GameScreen(QWidget):
         table = self.poker_game.dealt
         # Use Poker_for_GUI's evaluate_hand
         print (hand, table)
-        rank, cards, hand_type = self.poker_game.evaluate_hand(hand, table)
+        rank, cards, hand_type = self.poker_game.evaluator.evaluate_hand(hand, table)
         self.hand_type_label.setText(f"Hand: {hand_type}")
     
     
