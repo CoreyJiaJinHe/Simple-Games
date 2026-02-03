@@ -7,6 +7,8 @@ class Player():
     def __init__(self,name, wallet=1000, bet_callback=None):
         self.name=name
         self.hand=[]
+        self.hands=[] #For split hands in blackjack
+        self.bets=[] #For split hands in blackjack
         self.table=[]
         self.wallet=wallet
         self.bet=0

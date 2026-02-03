@@ -176,3 +176,9 @@ class BlackjackHandEvaluator():
             return "Bust", total
         else:
             return "Continue", total
+    def is_blackjack(self, hand):
+        status, total = self.evaluate_hand(hand)
+        return status == "Blackjack"
+    def is_bust(self, hand):
+        status, total = self.evaluate_hand(hand)
+        return status == "Bust"
