@@ -15,11 +15,11 @@ class PlayerNode:
 
 class Poker_for_GUI():
     def __init__(self, player_names,
-                 bet_callback=None,
-                 phase_callback=None,
-                 pot_update_callback=None,
-                 bot_bet_update_callback=None,
-                 bot_fold_callback=None):
+                 bet_callback=None, #Callback to request bet from GUI
+                 phase_callback=None, #Callback to notify GUI of phase changes
+                 pot_update_callback=None, #Updates the pot label on the GUI
+                 bot_bet_update_callback=None, #Updates the bot bet label on the GUI
+                 bot_fold_callback=None): #Notifies GUI that a bot has folded and shows their cards
         self.dealer = Dealer()
         self.db_helper= Database_Helper()
         self.evaluator=PokerHandEvaluator()
@@ -192,7 +192,7 @@ class Poker_for_GUI():
 
         wallet_before = player.wallet
         if player.isBot:
-            player.set_bet(to_call, round_number=self._current_round_number)
+            self.bot_set_bet(player, to_call, round_number=self._current_round_number)
             wallet_after = player.wallet
             delta = wallet_after - wallet_before
             self.pot = sum(node.player.bet for node in self.player_nodes)
@@ -250,7 +250,7 @@ class Poker_for_GUI():
         river = self.dealer.deal_card()
         return river
     
-    def determine_winner(self, players, dealt):
+    def determine_winner(self, players: list[Player], dealt):
         winner= None
         highest_rank=0
         winning_hand=[]
@@ -270,9 +270,153 @@ class Poker_for_GUI():
         self.db_helper.update_player_stats(winner.name, self.pot, True, self.pot)
         
 
-    def award_player(self,player,bet):
+    def award_player(self,player : Player,bet: int):
         player.win_bet(bet)
-
+    
+    def bot_set_bet(self, bot_player : Player, minimum_bet : int, round_number=None):
+    
+        #Check hand strength
+        hand_strength=self.bot_assess_hand_strength(bot_player.hand, self.table)
+        #Determine maximum bet
+        self.bot_determine_maximum_bet(bot_player,round_number=round_number)
+        
+        bet = minimum_bet #Default to call
+        
+        #---------------------------------
+        #Cannot Continue Playing Scenarios
+        #---------------------------------
+        if bot_player.wallet <=0:
+            print(f"{bot_player.name} (Bot) has no funds left to bet. Skipping turn.")
+            return
+        if bot_player.isFolded:
+            print(f"{bot_player.name} (Bot) has already folded. Skipping turn.")
+            return
+        #---------------------------------
+        #Check for Check Scenario
+        #---------------------------------
+        if (minimum_bet == 0):
+            if (hand_strength<1):
+                print (f"{bot_player.name} (Bot) decides to check.")
+                return
+            else:
+                bet = random.randint(10, min(50, bot_player.wallet))
+                print (f"{bot_player.name} (Bot) decides to bet {bet} instead of checking.")
+                return
+        #---------------------------------
+        #All-in Scenario
+        #---------------------------------
+        elif (minimum_bet > bot_player.wallet):
+            minimum_bet = bot_player.wallet
+            #Pair or worse, don't do it.
+            if (hand_strength<=1):
+                bot_player.isFolded=True
+                print(f"{bot_player.name} (Bot) decides to fold as it does not want to\n"+
+                      f"all-in on the bet of {minimum_bet}.")
+            #Three of a kind or better, go for it.
+            elif (hand_strength>1):
+                print (f"{bot_player.name} (Bot) is going all-in with {minimum_bet}.")
+                bot_player.add_bet(minimum_bet)
+            return
+        #---------------------------------
+        #Call/Raise Scenario
+        #---------------------------------
+        else:
+            maximum_bet = bot_player.maximum_bet
+            #If the requirement to call, is greater than the maximum_bet minus
+            #the existing current_bet (already placed bet)
+            if (minimum_bet > maximum_bet-bot_player.current_bet):
+                #If the requirement to call is not 1.5 times more than the remaining allowable bet
+                if (minimum_bet*1.5 <= maximum_bet-bot_player.current_bet):
+                    #Make the bet.
+                    if (hand_strength<=1):
+                        bot_player.isFolded=True
+                        print(
+                            f"{bot_player.name} (Bot) decides to fold as the minimum bet {minimum_bet}\n"
+                            f"+ existing bet of {bot_player.current_bet} exceeds its maximum willingness to bet {maximum_bet}."
+                        )
+                        return
+                    #Three of a kind or better, go for it.
+                    elif (hand_strength>1):
+                        print (f"{bot_player.name} (Bot) has called. Remaining funds: {bot_player.wallet}")
+                        bet=minimum_bet
+                else:
+                    # Bluffing chance
+                    randomNumber=random.random()
+                    print(f"Random number for bluff decision: {randomNumber}")
+                    if (randomNumber>0.9):
+                        print(f"{bot_player.name} (Bot) thinks you are bluffing and matches your bet\n" +
+                                f"despite the odds.")
+                        bet=minimum_bet
+                    else:
+                        print(
+                            f"{bot_player.name} (Bot) decides to fold as the minimum bet {minimum_bet}\n"
+                            f"+ existing bet of {bot_player.current_bet} exceeds its maximum willingness to bet {maximum_bet}."
+                        )
+                        bot_player.isFolded=True
+                        return
+            else:
+                if (minimum_bet > maximum_bet):
+                    print(
+                        f"{bot_player.name} (Bot) decides to fold as the minimum bet {minimum_bet}\n"
+                        f"+ existing bet of {bot_player.current_bet} exceeds its maximum willingness to bet {maximum_bet}."
+                    )
+                    bot_player.isFolded=True
+                    return
+                
+                if (bot_player.risk_tolerance=="low" and bot_player.current_bet >= maximum_bet*0.5):
+                    #bet = minimum_bet
+                    pass
+                elif (bot_player.risk_tolerance=="medium" and bot_player.current_bet >= maximum_bet*0.7):
+                    bet = random.randint(minimum_bet, int(maximum_bet*0.7))
+                else:
+                    bet = random.randint(minimum_bet, min(maximum_bet, bot_player.wallet))
+        
+        if bet is not None:
+            bot_player.add_bet(bet)
+            if (bet == minimum_bet):
+                print (f"{bot_player.name} (Bot) has called. Remaining funds: {bot_player.wallet}")
+            else:
+                print(f"{bot_player.name} (Bot) has raised their bet by {bet}. Remaining funds: {bot_player.wallet}")
+        
+    def bot_determine_maximum_bet(self, bot_player : Player, round_number=None):
+        bot_player.maximum_bet=int(100*self.bot_assess_risk(bot_player) + 100* self.bot_assess_hand_strength(bot_player.hand, self.table))
+        # Risk | Hand Strength Category         | Strength | Calc                        | max_bet
+        # -----|-------------------------------|----------|-----------------------------|---------
+        # 0.2  | High Card                     | 0.5      | 100*0.2 + 100*0.5           | 70
+        # 0.2  | Pair or Two Pair              | 1        | 100*0.2 + 100*1             | 120
+        # 0.2  | Three of a Kind to Straight   | 1.5      | 100*0.2 + 100*1.5           | 170
+        # 0.2  | Full House or better          | 3.0      | 100*0.2 + 100*3.0           | 320
+        # 0.5  | High Card                     | 0.5      | 100*0.5 + 100*0.5           | 100
+        # 0.5  | Pair or Two Pair              | 1        | 100*0.5 + 100*1             | 150
+        # 0.5  | Three of a Kind to Straight   | 1.5      | 100*0.5 + 100*1.5           | 200
+        # 0.5  | Full House or better          | 3.0      | 100*0.5 + 100*3.0           | 350
+        # 1    | High Card                     | 0.5      | 100*1 + 100*0.5             | 150
+        # 1    | Pair or Two Pair              | 1        | 100*1 + 100*1               | 200
+        # 1    | Three of a Kind to Straight   | 1.5      | 100*1 + 100*1.5             | 250
+        # 1    | Full House or better          | 3.0      | 100*1 + 100*3.0             | 400
+    
+    def bot_assess_risk(self, bot_player : Player):
+        if bot_player.risk_tolerance == "low":
+            return 0.2
+        elif bot_player.risk_tolerance == "medium":
+            return 0.5
+        else:  # high risk tolerance
+            return 1
+    
+    
+    def bot_assess_hand_strength(self, hand, dealt):
+        rank, result, name = self.evaluator.evaluate_hand(hand, dealt)
+        print (f"{self.name} (Bot) assesses its hand as a {name}.")
+        if rank >= 7:  # Full House or better
+            return 3.0
+        elif rank >= 4:  # Three of a Kind to Straight
+            return 1.5
+        elif rank >= 2:  # Pair to Two Pair
+            return 1
+        else:  # High Card
+            return 0.5
+    
+    
     
 def game_start():
     print("Starting Poker Game...")

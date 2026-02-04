@@ -33,7 +33,7 @@ class MainWindow(QWidget):
         
         self.stacked_widget = QStackedWidget(self)
         self.welcome_screen = WelcomeScreen(self.show_game_screen)
-        self.game_screen = GameScreen(parent=self)
+        self.game_screen = PokerGameScreen(parent=self)
 
         self.stacked_widget.addWidget(self.welcome_screen)
         self.stacked_widget.addWidget(self.game_screen)
@@ -60,12 +60,12 @@ class MainWindow(QWidget):
         self.middle_frame.show()
         
     def resizeEvent(self, event):
-        # Ensure the background frame always fills the GameScreen
+        # Ensure the background frame always fills the PokerGameScreen
         self.outer_frame.setGeometry(self.rect())
         self.middle_frame.setGeometry(self.rect().adjusted(8, 8, -8, -8))
         super().resizeEvent(event)
         
-class GameScreen(QWidget):
+class PokerGameScreen(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.main_window=parent
@@ -254,14 +254,10 @@ class GameScreen(QWidget):
         self.poker_game.start_game()
     
     def resizeEvent(self, event):
-        # Ensure the background frame always fills the GameScreen
+        # Ensure the background frame always fills the PokerGameScreen
         self.bg_frame.setGeometry(self.rect())
         super().resizeEvent(event)
-    # def resizeEvent(self, event):
-    #     new_width = max(0, self.width() - 200)
-    #     self.middle_row_widget.setMaximumWidth(new_width)
-    #     #self.middle_row_widget.setMinimumWidth(0)
-    #     super().resizeEvent(event)
+        
     def set_player_name(self, player_name):
         self.player_name = player_name
         # Re-initialize wallet and UI elements as needed
@@ -390,7 +386,7 @@ class GameScreen(QWidget):
             self.start_game()
         else:
             self.reset_bot_cards()
-            self.close()  # Or self.close() if GameScreen is the main window
+            self.close()  # Or self.close() if PokerGameScreen is the main window
             self.main_window.show_welcome_screen()
             
     def reset_bot_cards(self):

@@ -12,7 +12,7 @@ def init_deck():
     for y in suit:
         for x in rank:
             cards.append(str(x)+y)
-    print (cards)
+    #print (cards)
     return cards
 
 def custom_sort(hand):

@@ -18,7 +18,7 @@ class Dealer():
         self.used_cards.append(card)
         self.hand.append(card)
     
-    def show_hand(self):
+    def get_hand(self):
         return self.hand
     
     def debug_deck(self):
