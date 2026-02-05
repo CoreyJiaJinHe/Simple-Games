@@ -18,6 +18,12 @@ class Dealer():
         self.used_cards.append(card)
         self.hand.append(card)
     
+    def deal_self_return(self):
+        card = self.deal_card()
+        self.used_cards.append(card)
+        self.hand.append(card)
+        return card
+    
     def get_hand(self):
         return self.hand
     

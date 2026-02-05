@@ -14,20 +14,24 @@ class BlackjackDealer(Dealer):
     def __init__(self):
         super().__init__()
     
-    def play_out(self,evaluator):
+    def play_out(self,evaluator: BlackjackHandEvaluator):
         while True:
-            ignore, hand_value = evaluator.evaluate_hand(self.get_hand())
+            hand_value = evaluator.evaluate_hand(self.get_hand())
+            #print(hand_value)
             if hand_value < 17:
                 card=self.deal_self_return()
-                print(f"Dealer hits and receives: {show_substituted(card)}")
+                hand_value= evaluator.evaluate_hand(self.get_hand())
+                print(f"Dealer hits and receives: {show_substituted(card)}. They are now at {hand_value}.")
             elif hand_value > 21:
-                print("Dealer busts!")
+                print("Dealer busts with hand:", show_substituted(self.get_hand()))
                 return False
             else:
+                print("Dealer stands with hand:", show_substituted(self.get_hand()))
                 break
         
     def debug_show_dealer_hand(self):
         print(f"Dealer's hand: {show_substituted(self.get_hand())}")
+
 class BlackJack():
     def __init__(self, player_names,
                  bet_callback=None,
@@ -107,153 +111,111 @@ class BlackJack():
     
     def check_immediate_win(self):
         dealer_blackjack =self.evaluator.is_blackjack(self.dealer.hand)
-        if (dealer_blackjack):
-            print ("Dealer has blackjack!")
+        immediate_result = None  # Will hold (player, winnings) if a player wins
+        if dealer_blackjack:
+            print("Dealer has blackjack!")
             for player in self.players:
                 player_blackjack = self.evaluator.is_blackjack(player.hand)
                 if player_blackjack:
                     print(f"{player.name} also has blackjack! It's a push.")
-                    #Push, return bet
                     player.return_bet()
                 else:
                     print(f"{player.name} loses to dealer blackjack.")
-                    #Dealer wins, take bet
-                    pass
-            return True
+            return True, None
         else:
             for player in self.players:
                 player_blackjack = self.evaluator.is_blackjack(player.hand)
                 if player_blackjack:
+                    winnings = 1.5 * player.bet + player.bet
                     print(f"{player.name} has blackjack and wins 1.5x their bet!")
-                    player.win_bet(1.5*player.bet+player.bet)
+                    immediate_result = (player, winnings)
                     self.players.remove(player)  # Remove player from further play
-                    if not (player.isBot):
-                        return True  # Game over for human player
-        
-        return False  # No immediate win, continue game
+                    if not player.isBot:
+                        return True, immediate_result
+        return False, None
     
     def decide_player_actions(self, player: Player):
-        split_check=self.check_if_split_possible(player)
-        if not player.isBot:
-            while True:
-                if self.bet_callback:
-                    # The callback should handle getting the action from the GUI and call back into this logic
-                    # For GUI, you might want to break here and let the callback resume the logic
-                    self.bet_callback(player)
-                    break
-                else:
-                    self.show_only_player_hand()
-                    ignore, total= self.evaluator.evaluate_hand(player.hand)
-                    print(f"{player.name}'s hand total is: {total}")
-                    options = ['hit', 'stand', 'double down', 'surrender']
-                    if split_check:
-                        options.append('split')
-                    action = input(f"Choose action ({', '.join(options)}): ").strip().lower()
-                    
-                    if action == 'hit':
-                        player.request_card(self.dealer)
-                    elif action == 'stand':
-                        print(f"{player.name} stands with hand: {show_substituted(player.hand)}")
-                        break
-                    elif action == 'double down':
-                        if player.wallet >= player.bet:
-                            player.add_to_bet(player.bet)
-                            player.request_card(self.dealer)
-                            print(f"{player.name} doubles down and receives a card: {show_substituted(player.hand)}")
-                            break
-                        else:
-                            print(f"{player.name} does not have enough funds to double down.")
-                    elif action == 'surrender':
-                        refund = player.bet / 2
-                        player.surrender_bet()
-                        print(f"{player.name} surrenders and gets back {refund}.")
-                        break
-                    elif action == 'split' and split_check:
-                        # Handle split logic here
-                        self.handle_split(player)
-                        print("Player has split their hand.")
+        # Ensure player.hands is always a list of hands
+        if not hasattr(player, 'hands') or not player.hands:
+            player.hands = [player.hand]
+            player.bets = [player.bet]
+        
+        for i, hand in enumerate(player.hands):
+            split_check=self.check_if_split_possible(hand)
+            can_split = split_check and len(player.hands) < 4 and player.wallet >= player.bets[i]
+            if not player.isBot:
+                while True:
+                    if self.bet_callback:
+                        # The callback should handle getting the action from the GUI and call back into this logic
+                        # For GUI, you might want to break here and let the callback resume the logic
+                        self.bet_callback(player)
                         break
                     else:
-                        print("Invalid action. Please choose again.")
-                if self.evaluator.is_bust(player.hand):
-                    print(f"{player.name} bust with hand: {show_substituted(player.hand)}")
-                    break
+                        if self.evaluator.is_bust(hand):
+                            break
+                        print(f"{player.name}'s hand: {show_substituted(hand)}")
+                        total= self.evaluator.evaluate_hand(hand)
+                        print(f"{player.name}'s hand total is: {total}")
+                        options = ['hit', 'stand', 'double down', 'surrender']
+                        if can_split:
+                            options.append('split')
+                        action = input(
+                            f"Playing hand {i+1}: {show_substituted(hand)}\nChoose action ({', '
+                            .join(options)}): ").strip().lower()
+                        if action == 'hit':
+                            player.hands[i].append(self.dealer.deal_card())
+                        elif action == 'stand':
+                            print(f"{player.name} stands with hand: {show_substituted(hand)}")
+                            break
+                        elif action == 'double down':
+                            if player.wallet >= player.bets[i]:
+                                player.add_to_bet(player.bets[i])
+                                player.hands[i].append(self.dealer.deal_card())
+                                print(f"{player.name} doubles down and receives a card: {show_substituted(hand)}")
+                            else:
+                                print(f"{player.name} does not have enough funds to double down.")
+                        elif action == 'surrender':
+                            refund = player.bets[i] / 2
+                            player.surrender_bet(refund)
+                            print(f"{player.name} surrenders and gets back {refund}.")
+                            break
+                        elif action == 'split' and can_split:
+                            # Handle split logic here
+                            self.handle_split(player,i)
+                            print("Player has split their hand.")
+                            return self.decide_player_actions(player)
+                        else:
+                            print("Invalid action. Please choose again.")
+                if self.evaluator.is_bust(hand):
+                    print(f"{player.name} bust with hand: {show_substituted(hand)}")
     
-    def handle_split(self, player: Player):
-        card1, card2 = player.hand
-        if player.wallet < player.bet:
-            print("Not enough funds to split.")
+    def handle_split(self, player: Player, hand_index: int):
+        hand = player.hands[hand_index]
+        if len(hand) != 2 or player.wallet < player.bets[hand_index]:
+            print("Cannot split this hand.")
             return
+
+        card1, card2 = hand
         # Remove the original hand and bet
-        player.hands = []
-        player.bets = []
-        # Create two hands, each with one card, and place a bet for each
-        player.hands.append([card1])
-        player.hands.append([card2])
-        player.bets.append(player.bet)
-        player.bets.append(player.bet)
-        player.wallet -= player.bet  # Deduct the second bet
+        player.hands.pop(hand_index)
+        bet = player.bets.pop(hand_index)
+
+        # Create two new hands, each with one card, and place a bet for each
+        player.hands.insert(hand_index, [card2])
+        player.hands.insert(hand_index, [card1])
+        player.bets.insert(hand_index, bet)
+        player.bets.insert(hand_index, bet)
+        player.add_bet(bet)  # Deduct the additional bet
 
         # Deal one card to each new hand
-        for hand in player.hands:
-            hand.append(self.dealer.deal_card())
+        player.hands[hand_index].append(self.dealer.deal_card())
+        player.hands[hand_index + 1].append(self.dealer.deal_card())
 
         print(f"{player.name} splits: {player.hands}")
-        # Let the player act on each hand immediately after splitting
-        for i, hand in enumerate(player.hands):
-            print(f"Playing hand {i+1}: {show_substituted(hand)}")
-            self.decide_player_actions_for_hand(player, hand, i)
-        
-    def decide_player_actions_for_hand(self, player: Player, hand, hand_index):
-        split_check=self.check_if_split_possible(player)
-        if not player.isBot:
-            while True:
-                if self.bet_callback:
-                    # The callback should handle getting the action from the GUI and call back into this logic
-                    # For GUI, you might want to break here and let the callback resume the logic
-                    self.bet_callback(player)
-                    break
-                else:
-                    options = ['hit', 'stand', 'double down', 'surrender']
-                    if split_check:
-                        options.append('split')
-                    action = input(f"Choose action ({', '.join(options)}): ").strip().lower()
-                
-                if action == 'hit':
-                    player.hands[hand_index].append(self.dealer.deal_card())
-                    if self.evaluator.is_bust(player.hands[hand_index]):
-                        print(f"{player.name} busts with hand: {show_substituted(player.hands[hand_index])}")
-                        break
-                elif action == 'stand':
-                    print(f"{player.name} stands with hand: {show_substituted(player.hands[hand_index])}")
-                    break
-                elif action == 'double down':
-                    if player.wallet >= player.bets[hand_index]:
-                        player.add_to_bet(player.bets[hand_index])
-                        player.hands[hand_index].append(self.dealer.deal_card())
-                        print(f"{player.name} doubles down and receives a card: {show_substituted(player.hands[hand_index])}")
-                        if self.evaluator.is_bust(player.hands[hand_index]):
-                            print(f"{player.name} busts with hand: {show_substituted(player.hands[hand_index])}")
-                        break
-                    else:
-                        print(f"{player.name} does not have enough funds to double down.")
-                elif action == 'surrender':
-                    refund = player.bets[hand_index] / 2
-                    player.wallet += refund
-                    print(f"{player.name} surrenders and gets back {refund}.")
-                    break
-                elif action == 'split' and split_check:
-                    # Handle split logic here
-                    self.handle_split(player)
-                    break
-                else:
-                    print("Invalid action. Please choose again.")
-        
-        
-        
-    def check_if_split_possible(self, player):
-        if len(player.hand) == 2:
-            card1, card2 = player.hand
+
+    def check_if_split_possible(self, hand):
+        if len(hand) == 2:
+            card1, card2 = hand
             if remove_suit([card1])[0] == remove_suit([card2])[0]:
                 return True
         return False
@@ -265,6 +227,11 @@ class BlackJack():
         
         #Then deal cards clockwise/counterclockwise.
         self.deal_initial_hands()
+        def debug_hand():
+            main_player_node = next(node for node in self.player_nodes if not node.player.isBot)
+            main_player = main_player_node.player
+            main_player.hand=['AH','AD']
+        debug_hand()
         self.show_only_player_hand()
         
         #self.show_hands()
@@ -275,11 +242,25 @@ class BlackJack():
         #If Dealer doesn't, lose insurance bet.
         #If Player has blackjack as well, nothing happens. Everyone keeps their bet.
         #Dealer wins otherwise.
-        immediate_win=self.check_immediate_win()
+        immediate_win, immediate_result = self.check_immediate_win()
         if immediate_win:
+            if immediate_result:
+                player, winnings = immediate_result
+                self.award_player(player, winnings)
+                self.db_helper.log_game(
+                    "Blackjack",
+                    ', '.join([p.name for p in self.players]),
+                    player.name,
+                    winnings
+                )
+                self.db_helper.update_player_stats(
+                    player.name,
+                    winnings,
+                    True,
+                    winnings
+                )
             print("Game over. Play again?")
             return
-            
         #After cards are dealt, check for blackjack among all players.
         #If dealer has blackjack, game ends. If player has blackjack, they win 1.5x their bet if dealer can't match.
         #If not, play normally.
@@ -293,52 +274,102 @@ class BlackJack():
         active_players = [n for n in self.player_nodes if not n.player.isFolded and n.player.wallet > 0]
         for node in active_players:
             player = node.player
-            if player.hands:
-                for i, hand in enumerate(player.hands):
-                    print(f"Playing hand {i+1}: {show_substituted(hand)}")
-                    # Let the player act on each hand (hit/stand/etc.)
-                    self.decide_player_actions_for_hand(player, hand, i)
-            else:
-                self.decide_player_actions(player)
+            self.decide_player_actions(player)
         
         
         #After player is done, dealer reveals hidden card and hits until they reach 17 or higher.
         self.dealer.play_out(self.evaluator)
-        self.determine_winner()
-    def determine_winner(self):
-        ignore, dealerTotal = self.evaluator.evaluate_hand(self.dealer.get_hand())
-        player_node = next(node for node in self.player_nodes if not node.player.isBot)
+        hand_results, net_winnings, dealerTotal, total_payout = self.determine_winner()
+        if self.phase_callback:
+            self.phase_callback("round_end", [dealerTotal, net_winnings])
+
+        for i, hand_result in enumerate(hand_results):
+            if hand_result['result'] == 'win':
+                self.award_player(player, hand_result['bet'] * 2)
+            elif hand_result['result'] == 'push':
+                self.award_player(player, hand_result['bet'])
+
+        self.db_helper.log_game(
+            "Blackjack",
+            ', '.join([p.name for p in self.players]),
+            player.name,
+            net_winnings
+        )
+        self.db_helper.update_player_stats(
+            player.name,
+            net_winnings,                # profit/loss
+            net_winnings > 0,            # won_game
+            total_payout                 # total payout (bets returned + winnings)
+        )
+        print("Game over. Play again?")
         
+
+    def determine_winner(self):
+        dealerTotal = self.evaluator.evaluate_hand(self.dealer.get_hand())
+        player_node = next(node for node in self.player_nodes if not node.player.isBot)
         player = player_node.player
+        hand_results = []
+        net_winnings = 0
+        total_payout = 0
+
         if player.hands:
             for i, hand in enumerate(player.hands):
-                print(f"Results for hand {i+1}: {show_substituted(hand)}")
-                ignore, playerTotal = self.evaluator.evaluate_hand(hand)[1]
+                print(f"Evaluating for hand {i+1}: {show_substituted(hand)}")
+                playerTotal = self.evaluator.evaluate_hand(hand)
+                result = None
+                winnings = 0
                 if playerTotal > dealerTotal or dealerTotal > 21:
-                    winnings = 2 * player.bets[i]
-                    print(f"{player.name} wins hand {i+1} with total {playerTotal} against dealer's {dealerTotal}! Wins {winnings}.")
-                    player.win_bet(winnings)
+                    result = 'win'
+                    winnings = player.bets[i] * 2
+                    net_winnings += player.bets[i]
+                    print(f"For hand {i+1}, {player.name} wins with total {playerTotal} against dealer's {dealerTotal}! Wins {winnings}.")
                 elif playerTotal == dealerTotal:
-                    print(f"{player.name} pushes on hand {i+1} with total {playerTotal} against dealer's {dealerTotal}. Bet returned.")
-                    player.return_bet()
+                    result = 'push'
+                    winnings = player.bets[i]  # bet returned
+                    print(f"For hand {i+1}, {player.name} pushes with total {playerTotal} against dealer's {dealerTotal}. Bet returned.")
                 else:
-                    print(f"{player.name} loses hand {i+1} with total {playerTotal} against dealer's {dealerTotal}.")
-                    # Bet is already lost
+                    result = 'lose'
+                    winnings = 0
+                    net_winnings -= player.bets[i]
+                    print(f"For hand {i+1}, {player.name} loses with total {playerTotal} against dealer's {dealerTotal}.")
+                total_payout += winnings
+                hand_results.append({'result': result, 'bet': player.bets[i], 'winnings': winnings})
         else:
-            ignore, playerTotal = self.evaluator.evaluate_hand(player.hand)
+            playerTotal = self.evaluator.evaluate_hand(player.hand)
             if playerTotal > dealerTotal or dealerTotal > 21:
-                winnings = 2 * player.bet
-                print(f"{player.name} wins with total {playerTotal} against dealer's {dealerTotal}! Wins {winnings}.")
-                player.win_bet(winnings)
+                net_winnings = player.bet
+                total_payout = player.bet * 2
+                print(f"{player.name} wins with total {playerTotal} against dealer's {dealerTotal}! Wins {player.bet * 2}.")
             elif playerTotal == dealerTotal:
+                total_payout = player.bet
                 print(f"{player.name} pushes with total {playerTotal} against dealer's {dealerTotal}. Bet returned.")
-                player.return_bet()
             else:
+                net_winnings = -player.bet
+                total_payout = 0
                 print(f"{player.name} loses with total {playerTotal} against dealer's {dealerTotal}.")
-                # Bet is already lost
 
-
-
+        # Return overall result
+        return hand_results, net_winnings, dealerTotal, total_payout    
+    def award_player(self,player : Player,bet: int):
+        player.win_bet(bet)
+        
+    def determine_bot_winners(self):
+        dealerTotal = self.evaluator.evaluate_hand(self.dealer.get_hand())
+        winners = []
+        for node in self.player_nodes:
+            player = node.player
+            if player.isBot:
+                if player.hands:
+                    for hand in player.hands:
+                        playerTotal = self.evaluator.evaluate_hand(hand)
+                        if playerTotal > dealerTotal or dealerTotal > 21:
+                            winners.append(player.name)
+                else:
+                    playerTotal = self.evaluator.evaluate_hand(player.hand)
+                    if playerTotal > dealerTotal or dealerTotal > 21:
+                        winners.append(player.name)
+        return winners
+        
 if __name__ == "__main__":
     game = BlackJack(player_names=["You", "Bot1", "Bot2"])
     game.start_game()

@@ -1,6 +1,7 @@
 
 import database
 class Database_Helper():
+    detailed_debug_print_override = False
     def requires_player(func):
         def wrapper(self, player_name, *args, **kwargs):
             if player_name in self.players:
@@ -13,6 +14,9 @@ class Database_Helper():
         self.db = database.gameDatabase()
         self.players =self.retrieve_list_of_players()
     def log_game(self, game_type, players, winner, pot):
+        if self.detailed_debug_print_override:
+            print("Logging game to database...")
+            print(f"{game_type}, {players}, {winner}, {pot}")
         self.db.log_game(game_type, players, winner, pot)
         print(f"{game_type} Game logged to database.")
     
@@ -32,6 +36,8 @@ class Database_Helper():
     
     @requires_player
     def update_player_stats(self, player_name, wallet_change, won_game, winnings):
+        if self.detailed_debug_print_override:
+            print(f"Updating stats for {player_name}: wallet_change={wallet_change}, won_game={won_game}, winnings={winnings}")
         self.db.update_player_stats(player_name, wallet_change, won_game, winnings)
 
     @requires_player

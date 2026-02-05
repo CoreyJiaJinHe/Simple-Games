@@ -170,15 +170,19 @@ class BlackjackHandEvaluator():
             total -= 10
             aces -= 1
         
-        if total == 21 and len(hand) == 2:
-            return "Blackjack", total
-        elif total > 21:
-            return "Bust", total
-        else:
-            return "Continue", total
+        # if total == 21 and len(hand) == 2:
+        #     return total
+        # elif total > 21:
+        #     return total
+        # else:
+        return total
+
     def is_blackjack(self, hand):
-        status, total = self.evaluate_hand(hand)
-        return status == "Blackjack"
+        status = self.evaluate_hand(hand)
+        if (status == 21 and len(hand) == 2):
+            return True
+        return False
+    
     def is_bust(self, hand):
-        status, total = self.evaluate_hand(hand)
-        return status == "Bust"
+        status = self.evaluate_hand(hand)
+        return status > 21
