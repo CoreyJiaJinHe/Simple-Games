@@ -15,7 +15,7 @@ class PlayerNode:
 
 class Poker_for_GUI():
     def __init__(self, player_names,
-                 bet_callback=None, #Callback to request bet from GUI
+                 action_callback=None, #Callback to request bet from GUI
                  phase_callback=None, #Callback to notify GUI of phase changes
                  pot_update_callback=None, #Updates the pot label on the GUI
                  bot_bet_update_callback=None, #Updates the bot bet label on the GUI
@@ -34,7 +34,7 @@ class Poker_for_GUI():
             self.db_helper.player_take_loan(player_names[0])
 
         # Create the user player with the correct wallet
-        user_player = Player(player_names[0], bet_callback=bet_callback, wallet=wallet)
+        user_player = Player(player_names[0], action_callback=action_callback, wallet=wallet)
         bot_players = [BotPlayer(f"Bot{i}", game_type="Poker") for i in range(1, len(player_names))]
         self.players = [user_player] + bot_players
         # Create circular linked list of players
@@ -49,7 +49,7 @@ class Poker_for_GUI():
         self.minimum_bet = 10
         
         
-        self.bet_callback = bet_callback
+        self.action_callback = action_callback
         self.phase_callback = phase_callback
         self.pot_update_callback = pot_update_callback
         self.bot_bet_update_callback = bot_bet_update_callback
@@ -213,10 +213,10 @@ class Poker_for_GUI():
             self.betting_next()
         else:
             # For human, call the callback and wait for GUI to resume
-            if self.bet_callback:
+            if self.action_callback:
                 self._last_human_node = node  # Save for resume
                 self._last_human_bet = player.current_bet  # Save for resume
-                self.bet_callback(to_call)
+                self.action_callback(to_call)
             else:
                 player.set_bet(to_call)
                 if player.current_bet > self._betting_current_bet:
@@ -263,7 +263,8 @@ class Poker_for_GUI():
                 highest_rank = rank
                 winner = player
                 winning_hand = result
-        self.phase_callback("winner", [winner.name,winning_hand,self.pot])
+        if self.phase_callback:
+            self.phase_callback("winner", [winner.name,winning_hand,self.pot])
         print(f"The winner is {winner.name} with hand: {show_substituted(winning_hand)}")
         self.award_player(winner, self.pot)
         self.db_helper.log_game("Poker", ', '.join([p.name for p in players]), winner.name, self.pot)

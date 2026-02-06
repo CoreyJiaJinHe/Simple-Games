@@ -34,7 +34,7 @@ class BlackjackDealer(Dealer):
 
 class BlackJack():
     def __init__(self, player_names,
-                 bet_callback=None,
+                 action_callback=None,
                  phase_callback=None,
                  pot_update_callback=None,
                  bot_bet_update_callback=None,
@@ -52,7 +52,7 @@ class BlackJack():
         elif wallet <= 0:
             self.db_helper.player_take_loan(player_names[0])
             
-        user_player = Player(player_names[0], bet_callback=bet_callback, wallet=wallet)
+        user_player = Player(player_names[0], bet_callback=action_callback, wallet=wallet)
         bot_players = [BotPlayer(f"Bot{i}", game_type="Blackjack") for i in range(1, len(player_names))]
         self.players = bot_players + [user_player]
         # Create circular linked list of players
@@ -67,7 +67,7 @@ class BlackJack():
         self.minimum_bet = 10
         
         
-        self.bet_callback = bet_callback
+        self.action_callback = action_callback
         self.phase_callback = phase_callback
         self.pot_update_callback = pot_update_callback
         self.bot_bet_update_callback = bot_bet_update_callback
@@ -79,6 +79,15 @@ class BlackJack():
                 player.request_card(self.dealer)
             self.dealer.deal_self()
         
+        if self.phase_callback:
+            self.phase_callback("initial_deal", {"players": self.players, "dealer": self.dealer.get_hand()})
+        
+    def fix_hands_and_bets(self):
+        for player in self.players:
+            if not player.hands:
+                player.hands = [player.hand]
+                player.bets = [player.bet]
+    
     def show_hands(self):
         for player in self.players:
             print(f"{player.name}'s hand: {show_substituted(player.hand)}")
@@ -101,8 +110,8 @@ class BlackJack():
                 if self.bot_bet_update_callback:
                     self.bot_bet_update_callback(player.name, bet)
             else:
-                if self.bet_callback:
-                    self.bet_callback(player.name, bet)
+                if self.action_callback:
+                    self.action_callback(player.name, bet)
                 else:
                     bet = player.set_bet(self.minimum_bet)
             
@@ -133,62 +142,117 @@ class BlackJack():
                     if not player.isBot:
                         return True, immediate_result
         return False, None
+    def get_action_options(self, player: Player, hand_index: int):
+        if not player.hands:
+            hand = player.hand
+        else:
+            hand = player.hands[hand_index]
+        split_check = self.check_if_split_possible(hand)
+        can_split = split_check and len(player.hands) < 4 and player.wallet >= player.bets[hand_index]
+        options = ['hit', 'stand', 'double down', 'surrender']
+        if can_split:
+            options.append('split')
+        return hand, options
+
+    def request_player_action(self, player: Player, hand_index=0):
+        print (f"Requesting action from {player.name} for hand {hand_index+1}...")
+        if player.isBot:
+        # Let the bot logic handle the action automatically
+            #self.bot_play_hand(player, hand_index)
+            return
     
-    def decide_player_actions(self, player: Player):
-        # Ensure player.hands is always a list of hands
-        if not hasattr(player, 'hands') or not player.hands:
-            player.hands = [player.hand]
-            player.bets = [player.bet]
-        
-        for i, hand in enumerate(player.hands):
-            split_check=self.check_if_split_possible(hand)
-            can_split = split_check and len(player.hands) < 4 and player.wallet >= player.bets[i]
-            if not player.isBot:
-                while True:
-                    if self.bet_callback:
-                        # The callback should handle getting the action from the GUI and call back into this logic
-                        # For GUI, you might want to break here and let the callback resume the logic
-                        self.bet_callback(player)
-                        break
-                    else:
-                        if self.evaluator.is_bust(hand):
-                            break
-                        print(f"{player.name}'s hand: {show_substituted(hand)}")
-                        total= self.evaluator.evaluate_hand(hand)
-                        print(f"{player.name}'s hand total is: {total}")
-                        options = ['hit', 'stand', 'double down', 'surrender']
-                        if can_split:
-                            options.append('split')
-                        action = input(
-                            f"Playing hand {i+1}: {show_substituted(hand)}\nChoose action ({', '
-                            .join(options)}): ").strip().lower()
-                        if action == 'hit':
-                            player.hands[i].append(self.dealer.deal_card())
-                        elif action == 'stand':
-                            print(f"{player.name} stands with hand: {show_substituted(hand)}")
-                            break
-                        elif action == 'double down':
-                            if player.wallet >= player.bets[i]:
-                                player.add_to_bet(player.bets[i])
-                                player.hands[i].append(self.dealer.deal_card())
-                                print(f"{player.name} doubles down and receives a card: {show_substituted(hand)}")
-                            else:
-                                print(f"{player.name} does not have enough funds to double down.")
-                        elif action == 'surrender':
-                            refund = player.bets[i] / 2
-                            player.surrender_bet(refund)
-                            print(f"{player.name} surrenders and gets back {refund}.")
-                            break
-                        elif action == 'split' and can_split:
-                            # Handle split logic here
-                            self.handle_split(player,i)
-                            print("Player has split their hand.")
-                            return self.decide_player_actions(player)
-                        else:
-                            print("Invalid action. Please choose again.")
+        hand, options = self.get_action_options(player, hand_index)
+        # Tell the GUI to prompt for action
+        if self.action_callback:
+            self.action_callback(player, hand_index, options)
+        else:
+            self.cli_player_action(player, hand_index)
+    
+    def process_player_action(self, player: Player, hand_index: int, action: str):
+        if not player.hands:
+            hand = player.hand
+        else:
+            hand = player.hands[hand_index]
+        phase_action = None
+        prompt_next = False
+        hand_finished = False
+    
+        if action == 'hit':
+            hand.append(self.dealer.deal_card())
+            if self.evaluator.is_bust(hand):
+                phase_action="bust"
+                hand_finished = True
+            else:
+                phase_action = "hit"
+                prompt_next = True
+        elif action == 'stand':
+            phase_action="stand"
+            hand_finished = True
+        elif action == 'double down':
+            if player.wallet >= player.bets[hand_index]:
+                player.add_to_bet(player.bets[hand_index])
+                hand.append(self.dealer.deal_card())
                 if self.evaluator.is_bust(hand):
-                    print(f"{player.name} bust with hand: {show_substituted(hand)}")
+                    phase_action="bust"
+                    hand_finished = True
+                else:
+                    phase_action="double_down"
+            else:
+                phase_action = "funds_error"
+                prompt_next = True
+        elif action == 'surrender':
+            refund = player.bets[hand_index] / 2
+            player.surrender_bet(refund)
+            phase_action="surrender"
+            hand_finished = True
+        elif action == 'split':
+            self.handle_split(player, hand_index)
+            phase_action="split"
+            prompt_next = True
+        else:
+            phase_action = "error"
+            prompt_next = True
+            
+
+        # Always notify the GUI/CLI of the state change
+        #All phase actions: 
+        #"hit", "stand", "double_down", "surrender", "split", "bust", "error", "funds_error"
+        if self.phase_callback and phase_action:
+            self.phase_callback(phase_action, {"name":player.name, "hands":player.hands, "bets":player.bets, "hand_index": hand_index})
+        
+        if hand_finished:
+            # Move to next hand if any
+            if hand_index + 1 < len(player.hands):
+                if self.action_callback:
+                    self.request_player_action(player, hand_index + 1)
+                else:
+                    self.cli_player_action(player, hand_index + 1)
+            # else: done with all hands for this player, return to main loop
+            return
+        # If more input is needed for the same hand (e.g., after hit or split), prompt again
+        elif prompt_next:
+            if self.action_callback:
+                self.request_player_action(player, hand_index)
+            else:
+                self.cli_player_action(player, hand_index)
+        # If the hand is finished, just return to let the main loop advance to the next hand/player
+
+    # CLI fallback for player action
+    def cli_player_action(self, player: Player, hand_index: int):
+        print (f"Requesting action from {player.name} for hand {hand_index+1}...")
+        if player.isBot:
+        # Let the bot logic handle the action automatically
+            #self.bot_play_hand(player, hand_index)
+            return
+        hand, options = self.get_action_options(player, hand_index)
+        print(f"{player.name}'s hand: {show_substituted(hand)}. The hand total is: {self.evaluator.evaluate_hand(hand)}")
+        print(f"Options: {', '.join(options)}")
+        action = input("Choose action: ").strip().lower()
+        self.process_player_action(player, hand_index, action)
     
+    
+    # def decide_player_actions(self, player: Player):
+
     def handle_split(self, player: Player, hand_index: int):
         hand = player.hands[hand_index]
         if len(hand) != 2 or player.wallet < player.bets[hand_index]:
@@ -216,6 +280,7 @@ class BlackJack():
     def check_if_split_possible(self, hand):
         if len(hand) == 2:
             card1, card2 = hand
+            #print("DEBUG split check:", card1, remove_suit([card1]), card2, remove_suit([card2]))
             if remove_suit([card1])[0] == remove_suit([card2])[0]:
                 return True
         return False
@@ -232,6 +297,7 @@ class BlackJack():
             main_player = main_player_node.player
             main_player.hand=['AH','AD']
         debug_hand()
+        self.fix_hands_and_bets()
         self.show_only_player_hand()
         
         #self.show_hands()
@@ -274,7 +340,7 @@ class BlackJack():
         active_players = [n for n in self.player_nodes if not n.player.isFolded and n.player.wallet > 0]
         for node in active_players:
             player = node.player
-            self.decide_player_actions(player)
+            self.request_player_action(player)
         
         
         #After player is done, dealer reveals hidden card and hits until they reach 17 or higher.

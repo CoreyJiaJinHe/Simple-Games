@@ -4,7 +4,7 @@ import random
 from HandEvaluators import PokerHandEvaluator
 from HandEvaluatorFactory import HandEvaluatorFactory
 class Player():
-    def __init__(self,name, wallet=1000, bet_callback=None):
+    def __init__(self,name, wallet=1000, action_callback=None):
         self.name=name
         self.hand=[]
         self.hands=[] #For split hands in blackjack
@@ -16,7 +16,7 @@ class Player():
         self.isBot=False
         self.risk_tolerance=random.choice(["low","medium","high"])
         self.isFolded=False
-        self.bet_callback = bet_callback
+        self.action_callback = action_callback
             
         
     def request_card(self, dealer):
@@ -28,9 +28,9 @@ class Player():
         #print(f"{self.name} has returned their bet of {self.bet}. New wallet balance: {self.wallet}")
         self.reset()
     
-    def surrender_bet(self):
-        self.wallet += self.bet / 2
-        #print(f"{self.name} has surrendered. Half of the bet {self.bet / 2} has been returned. New wallet balance: {self.wallet}")
+    def surrender_bet(self,refund):
+        self.wallet += refund
+        #print(f"{self.name} has surrendered. {refund} has been returned. New wallet balance: {self.wallet}")
         self.reset()
     
     def add_bet(self, amount):
@@ -66,8 +66,8 @@ class Player():
             print(f"{self.name} could not increase their bet by {amount} due to insufficient funds.")
             
     def set_bet(self, minimum_bet, round_number = None):
-        if self.bet_callback:
-            self.bet_callback(self, minimum_bet)
+        if self.action_callback:
+            self.action_callback(self, minimum_bet)
             return
         
         if (self.wallet <=0):
