@@ -277,7 +277,7 @@ class Poker_for_GUI():
     def bot_set_bet(self, bot_player : Player, minimum_bet : int, round_number=None):
     
         #Check hand strength
-        hand_strength=self.bot_assess_hand_strength(bot_player.hand, self.table)
+        hand_strength=self.bot_assess_hand_strength(bot_player, self.dealt)
         #Determine maximum bet
         self.bot_determine_maximum_bet(bot_player,round_number=round_number)
         
@@ -380,7 +380,8 @@ class Poker_for_GUI():
                 print(f"{bot_player.name} (Bot) has raised their bet by {bet}. Remaining funds: {bot_player.wallet}")
         
     def bot_determine_maximum_bet(self, bot_player : Player, round_number=None):
-        bot_player.maximum_bet=int(100*self.bot_assess_risk(bot_player) + 100* self.bot_assess_hand_strength(bot_player.hand, self.table))
+        # Assess using the bot player object, not its hand list
+        bot_player.maximum_bet=int(100*self.bot_assess_risk(bot_player) + 100* self.bot_assess_hand_strength(bot_player, self.dealt))
         # Risk | Hand Strength Category         | Strength | Calc                        | max_bet
         # -----|-------------------------------|----------|-----------------------------|---------
         # 0.2  | High Card                     | 0.5      | 100*0.2 + 100*0.5           | 70
@@ -405,9 +406,10 @@ class Poker_for_GUI():
             return 1
     
     
-    def bot_assess_hand_strength(self, hand, dealt):
-        rank, result, name = self.evaluator.evaluate_hand(hand, dealt)
-        print (f"{self.name} (Bot) assesses its hand as a {name}.")
+    def bot_assess_hand_strength(self, bot_player : Player, dealt):
+        rank, result, name = self.evaluator.evaluate_hand(bot_player.hand, dealt)
+        print (f"Bot hand evaluation: Rank {rank}, Hand: {show_substituted(result)}")
+        print (f"{bot_player.name} (Bot) assesses its hand as a {name}.")
         if rank >= 7:  # Full House or better
             return 3.0
         elif rank >= 4:  # Three of a Kind to Straight
