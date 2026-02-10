@@ -118,15 +118,15 @@ class BlackjackGameScreen(QWidget):
         layout.addLayout(top_bar_layout)
         
         # --- Bet label and input above cards ---
-        bet_label = QLabel("Enter your bet:", self)
-        bet_label.setFont(QFont('Arial', 16))
+        self.bet_label = QLabel("Enter your bet:", self)
+        self.bet_label.setFont(QFont('Arial', 16))
 
         self.bet_input = QLineEdit(self)
         self.bet_input.setPlaceholderText("Amount")
         self.bet_input.setFixedWidth(100)
 
         bet_input_layout = QHBoxLayout()
-        bet_input_layout.addWidget(bet_label)
+        bet_input_layout.addWidget(self.bet_label)
         bet_input_layout.addWidget(self.bet_input)
         self.initial_bet_button = QPushButton("Place Bet", self)
         bet_input_layout.addWidget(self.initial_bet_button)
@@ -310,7 +310,7 @@ class BlackjackGameScreen(QWidget):
         card_labels = []
         for _ in range(num_cards):
             card_label = QLabel()
-            card_label.setPixmap(QPixmap("cards_graphic/card_back.png").scaled(80, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            card_label.setPixmap(QPixmap("cards_graphic/card_back.png").scaled(60, 90, Qt.KeepAspectRatio, Qt.SmoothTransformation))
             hbox.addWidget(card_label)
             card_labels.append(card_label)
         vbox.addWidget(name_label, alignment=Qt.AlignCenter)
@@ -328,7 +328,7 @@ class BlackjackGameScreen(QWidget):
         # Adjust number of card labels if needed
         while len(bot_widget.card_labels) < len(hand):
             card_label = QLabel()
-            card_label.setPixmap(QPixmap("cards_graphic/card_back.png").scaled(80, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            card_label.setPixmap(QPixmap("cards_graphic/card_back.png").scaled(60, 90, Qt.KeepAspectRatio, Qt.SmoothTransformation))
             bot_widget.layout().itemAt(1).layout().addWidget(card_label)
             bot_widget.card_labels.append(card_label)
         while len(bot_widget.card_labels) > len(hand):
@@ -337,7 +337,7 @@ class BlackjackGameScreen(QWidget):
             label.deleteLater()
         # Update card images
         for i, card in enumerate(hand):
-            pixmap = QPixmap(f"cards_graphic/{card}.png").scaled(80, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            pixmap = QPixmap(f"cards_graphic/{card}.png").scaled(60, 90, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             bot_widget.card_labels[i].setPixmap(pixmap)
             bot_widget.card_labels[i].show()
             
@@ -419,6 +419,9 @@ class BlackjackGameScreen(QWidget):
         bet_amount = self.bet_input.text()
         # Process bet_amount as needed
         self.initial_bet_button.hide()
+        self.bet_input.hide()
+        if hasattr(self, 'bet_label') and self.bet_label is not None:
+            self.bet_label.hide()
         self.blackjack_game.initial_bet_received(int(bet_amount))
         
     def on_action_requested(self, player, hand_index, options):
@@ -427,15 +430,19 @@ class BlackjackGameScreen(QWidget):
             self.initial_bet_button.show()
             self.initial_bet_button.clicked.disconnect()  # Remove previous connections if any
             self.initial_bet_button.clicked.connect(lambda: self.submit_initial_bet())
+            self.disable_action_buttons()
         else:
             # Handle normal actions (hit, stand, etc.)
             self.current_player = player
             self.current_hand_index = hand_index
             self.enable_action_buttons(options)
+            
     def submit_initial_bet(self):
         bet_amount = int(self.bet_input.text())
         self.bet_input.hide()
         self.initial_bet_button.hide()
+        if hasattr(self, 'bet_label') and self.bet_label is not None:
+            self.bet_label.hide()
         self.blackjack_game.initial_bet_received(bet_amount)
     
     def enable_action_buttons(self, options):
@@ -471,13 +478,29 @@ class BlackjackGameScreen(QWidget):
             # Show dealer's cards as appropriate
             dealer_hand = data["dealer"]
             self.update_dealer_hand(dealer_hand)
+        elif phase == "dealer_instant_win_end":
+#            immediate_result = (player,winnings)
+            dealerTotal=data[0]
+            immediate_result=data[1]
+            if immediate_result is not None:
+                player, winnings = immediate_result
+                message = f"Player {player.name} wins. Winnings: {winnings}"
+            else:
+                message = f"Dealer has blackjack with total {dealerTotal}. All players lose."
         
-        
-        #returned data: {"name":player.name, "hands":player.hands, "bets":player.bets, "hand_index": hand_index})
-        if phase in ("player_action", "hit", "stand", "double_down", "surrender", "split", "bust"):
-            #player_hands = data["hands"]  # List of lists, e.g. [["AS", "10H"], ["8D", "3C"]]
-            #self.active_hand_index = data.get("hand_index", 0)
-            #self.set_hands(player_hands, self.active_hand_index)
+        # returned data: {"name":..., "hands":..., "bets":..., "hand_index": ...}
+        if phase in ("player_action", "hit", "stand", "double_down", "surrender", "split", "bust", "update"):
+            # Keep hand highlights in sync with engine
+            if data is not None and "hands" in data:
+                hands = data["hands"] if data["hands"] else [self.blackjack_game.players[0].hand]
+                # Default to engine-provided active hand index
+                idx = data.get("hand_index", 0)
+                # On bust, immediately advance highlight to the next hand if it exists
+                if phase == "bust" and idx + 1 < len(hands):
+                    idx = idx + 1
+                self.active_hand_index = idx
+                self.set_hands(hands, self.active_hand_index)
+
             if phase in ("stand", "surrender", "split", "bust"):
                 self.disable_action_buttons()
             elif phase == "error":
@@ -544,8 +567,8 @@ class BlackjackGameScreen(QWidget):
         bot_widget = self.opponent_widgets[bot_index]
         bot_widget.bet_label.setText("Folded")
         card_labels = bot_widget.findChildren(QLabel)[1:3]  # Adjust if needed
-        card_labels[0].setPixmap(QPixmap(f"cards_graphic/{hand[0]}.png").scaled(80, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        card_labels[1].setPixmap(QPixmap(f"cards_graphic/{hand[1]}.png").scaled(80, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        card_labels[0].setPixmap(QPixmap(f"cards_graphic/{hand[0]}.png").scaled(60, 90, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        card_labels[1].setPixmap(QPixmap(f"cards_graphic/{hand[1]}.png").scaled(60, 90, Qt.KeepAspectRatio, Qt.SmoothTransformation))
     
 
 class PokerGameScreen(QWidget):

@@ -132,16 +132,16 @@ class BlackJack():
                 else:
                     # CLI fallback: set minimum bet immediately
                     player.set_bet(self.minimum_bet)
-            
-        if self.pot_update_callback:
-            self.pot_update_callback(self.pot)
+        
     
     def initial_bet_received(self, bet: int):
         player= next(node for node in self.player_nodes if not node.player.isBot).player
         if player.add_bet(bet):
             print(f"{player.name} has placed a bet of {bet}. Current bet: {player.current_bet}. Remaining funds: {player.wallet}")
             if self.pot_update_callback:
-                self.pot_update_callback(self.pot)
+                # Sum of the main player's bets (handles pre-split and post-split)
+                total_bet = sum(player.bets) if getattr(player, 'bets', None) else (getattr(player, 'bet', 0) or getattr(player, 'current_bet', 0))
+                self.pot_update_callback(total_bet)
         else:
             print(f"{player.name} could not place a bet of {bet} due to insufficient funds.")
             return
@@ -174,7 +174,7 @@ class BlackJack():
             # End round on immediate blackjack
             if self.phase_callback:
                 dealerTotal = self.evaluator.evaluate_hand(self.dealer.get_hand())
-                self.phase_callback("round_end", [dealerTotal, 0])
+                self.phase_callback("dealer_instant_win_end", [dealerTotal, immediate_result])
             return
 
         # Event-driven: prompt only the main (non-bot) player, starting with hand 0
@@ -186,7 +186,8 @@ class BlackJack():
         self.request_player_action(main_player, 0)
 
     
-    def check_immediate_win(self):
+    def check_immediate_win(self) -> tuple:
+        # Check for dealer blackjack first
         dealer_blackjack =self.evaluator.is_blackjack(self.dealer.hand)
         immediate_result = None  # Will hold (player, winnings) if a player wins
         if dealer_blackjack:
@@ -210,6 +211,8 @@ class BlackJack():
                     if not player.isBot:
                         return True, immediate_result
         return False, None
+    
+    
     def get_action_options(self, player: Player, hand_index: int):
         if not player.hands:
             hand = player.hand
@@ -379,7 +382,10 @@ class BlackJack():
         player.bets.insert(hand_index, bet)
         player.bets.insert(hand_index, bet)
         player.add_bet(bet)  # Deduct the additional bet
-
+        if self.pot_update_callback:
+            # Sum of the main player's bets (handles pre-split and post-split)
+            total_bet = sum(player.bets) if getattr(player, 'bets', None) else (getattr(player, 'bet', 0) or getattr(player, 'current_bet', 0))
+            self.pot_update_callback(total_bet)
         # Deal one card to each new hand
         player.hands[hand_index].append(self.dealer.deal_card())
         player.hands[hand_index + 1].append(self.dealer.deal_card())
@@ -482,7 +488,7 @@ class BlackJack():
                 hand_results.append({'result': result, 'bet': player.bets[i], 'winnings': winnings})
         else:
             playerTotal = self.evaluator.evaluate_hand(player.hand)
-            if playerTotal > dealerTotal or dealerTotal > 21:
+            if playerTotal > dealerTotal and playerTotal < 22 or dealerTotal > 21 and playerTotal <= 21:
                 net_winnings = player.bet
                 total_payout = player.bet * 2
                 print(f"{player.name} wins with total {playerTotal} against dealer's {dealerTotal}! Wins {player.bet * 2}.")
