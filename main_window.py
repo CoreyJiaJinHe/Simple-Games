@@ -1,6 +1,6 @@
-from PyQt5.QtWidgets import QApplication,QMessageBox, QInputDialog, QFrame,QSizePolicy, QWidget, QLabel, QPushButton, QVBoxLayout, QStackedWidget, QLineEdit, QHBoxLayout, QGridLayout
-from PyQt5.QtCore import Qt, QEvent
-from PyQt5.QtGui import QFont, QPixmap, QKeySequence, QGuiApplication
+from PyQt5.QtWidgets import QApplication,QMessageBox, QInputDialog, QFrame,QSizePolicy, QWidget, QLabel, QPushButton, QVBoxLayout, QStackedWidget, QLineEdit, QHBoxLayout, QGridLayout, QLayout
+from PyQt5.QtCore import Qt, QEvent, QPoint, QTimer
+from PyQt5.QtGui import QFont, QPixmap, QKeySequence, QGuiApplication, QFontMetrics, QTextDocument
 from PyQt5.QtWidgets import QShortcut
 
 from game import Poker_for_GUI as PokerGame
@@ -61,8 +61,18 @@ class MainWindow(QWidget):
         self.blackjack_game_screen.set_bot_count(bot_count)
         self.blackjack_game_screen.set_player_name(player_name)
         self.blackjack_game_screen.start_game()
+        # Respect the Blackjack screen's minimum size to avoid squishing
+        try:
+            self.setMinimumSize(self.blackjack_game_screen.sizeHint())
+        except Exception:
+            pass
         # Fit window to content after screen switch
         self.adjustSize()
+        # Start at the computed minimum size automatically
+        try:
+            self.resize(self.minimumSize())
+        except Exception:
+            pass
         
         
     def show_poker_game_screen(self, player_name="You", bot_count=2):
@@ -92,7 +102,8 @@ class BlackjackGameScreen(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.main_window=parent
-        layout = QVBoxLayout()
+        self._prompted_this_round = False
+        content_layout = QVBoxLayout()
         
         self.bot_count=5
         
@@ -115,7 +126,7 @@ class BlackjackGameScreen(QWidget):
         top_bar_layout.addStretch()
         top_bar_layout.addWidget(self.wallet_label)
 
-        layout.addLayout(top_bar_layout)
+        content_layout.addLayout(top_bar_layout)
         
         # --- Bet label and input above cards ---
         self.bet_label = QLabel("Enter your bet:", self)
@@ -186,7 +197,8 @@ class BlackjackGameScreen(QWidget):
         # --- Table area with grid layout ---
         table_area = QGridLayout()
         table_area.setColumnStretch(0, 1)
-        table_area.setColumnStretch(1, 0)
+        # Widen the center column so overlay messages have more width
+        table_area.setColumnStretch(1, 2)
         table_area.setColumnStretch(2, 1)
         table_area.setRowStretch(0, 1)
         table_area.setRowStretch(1, 0)
@@ -213,7 +225,7 @@ class BlackjackGameScreen(QWidget):
         table_cards_layout.addWidget(self.dealer_widget)
         self.table_cards_widget.setLayout(table_cards_layout)
         
-        layout.addLayout(table_area)
+        content_layout.addLayout(table_area)
         # --- Center column: stack table cards, pot label, chips widget ---
         center_col_layout = QVBoxLayout()
         center_col_layout.setAlignment(Qt.AlignCenter)
@@ -228,25 +240,24 @@ class BlackjackGameScreen(QWidget):
         center_col_layout.addSpacing(16)
         center_col_layout.addWidget(self.chips_widget, alignment=Qt.AlignCenter)
 
-        center_col_widget = QWidget()
-        center_col_widget.setLayout(center_col_layout)
-        table_area.addWidget(center_col_widget, 1, 1, alignment=Qt.AlignCenter)
-        # --- Round message label (under chips) ---
+        # Use an attribute so we can overlay the round message inside it without changing layout
+        self.center_col_widget = QWidget()
+        # Ensure the center column expands to fill its grid cell horizontally
+        self.center_col_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.center_col_widget.setLayout(center_col_layout)
+        table_area.addWidget(self.center_col_widget, 1, 1, alignment=Qt.AlignCenter)
+        # --- Round message overlay (non-pushing, reparented to screen) ---
         self.round_message_label = QLabel("")
+        # Reparent to the BlackjackGameScreen so we can size/place relative to the full content area
+        self.round_message_label.setParent(self)
         self.round_message_label.setAlignment(Qt.AlignCenter)
         self.round_message_label.setFont(QFont('Arial', 18))
-        self.round_message_label.setStyleSheet("color: #111;")
+        self.round_message_label.setStyleSheet("color: #111; background: rgba(255,255,255,0.85); border: 1px solid #888; border-radius: 6px; padding: 2px 10px;")
+        self.round_message_label.setWordWrap(True)
+        # Let position_round_message compute width dynamically per content (no fixed min width)
         self.round_message_label.hide()
-        center_col_layout.addSpacing(10)
-        center_col_layout.addWidget(self.round_message_label, alignment=Qt.AlignCenter)
         
         # --- Combine cards and buttons horizontally ---
-        # cards_and_buttons_layout = QHBoxLayout()
-        # cards_and_buttons_layout.addWidget(cards_widget)
-        # cards_and_buttons_layout.addSpacing(20)
-        # cards_and_buttons_layout.addWidget(buttons_widget)
-        # cards_and_buttons_widget = QWidget()
-        # cards_and_buttons_widget.setLayout(cards_and_buttons_layout)
         cards_and_buttons_layout = QHBoxLayout()
         hands_widget = QWidget()
         hands_widget.setLayout(self.hands_layout)
@@ -261,17 +272,23 @@ class BlackjackGameScreen(QWidget):
         self.pot_label = QLabel("Pot: 0")
         self.pot_label.setFont(QFont('Arial',14))
         self.pot_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.pot_label, alignment=Qt.AlignCenter)
+        content_layout.addWidget(self.pot_label, alignment=Qt.AlignCenter)
         
         # --- Add to main layout ---
-        layout.addWidget(bet_input_widget, alignment=Qt.AlignCenter)
+        content_layout.addWidget(bet_input_widget, alignment=Qt.AlignCenter)
         self.hand_total_label = QLabel("Hand: ")
         self.hand_total_label.setFont(QFont('Arial', 14))
         #self.hand_total_label.setStyleSheet("color: #222;")
-        layout.addWidget(self.hand_total_label, alignment=Qt.AlignCenter)
-        layout.addWidget(cards_and_buttons_widget, alignment=Qt.AlignCenter)
+        content_layout.addWidget(self.hand_total_label, alignment=Qt.AlignCenter)
+        content_layout.addWidget(cards_and_buttons_widget, alignment=Qt.AlignCenter)
 
-        self.setLayout(layout)
+        # Prevent squishing: enforce minimum size equal to layout's size hint
+        content_layout.setSizeConstraint(QLayout.SetMinimumSize)
+        self.setLayout(content_layout)
+        try:
+            self.setMinimumSize(self.sizeHint())
+        except Exception:
+            pass
         
         self.db_helper=DBHelper()
         # Round-state flags
@@ -280,6 +297,11 @@ class BlackjackGameScreen(QWidget):
     def resizeEvent(self, event):
         # Ensure the background frame always fills the PokerGameScreen
         self.bg_frame.setGeometry(self.rect())
+        # Keep round message overlay positioned within center column
+        try:
+            self.position_round_message()
+        except Exception:
+            pass
         super().resizeEvent(event)
     def set_hands(self, hands, active_hand_index=0):
         # Enforce a hard limit of four hands
@@ -321,6 +343,7 @@ class BlackjackGameScreen(QWidget):
         card_labels = []
         for _ in range(num_cards):
             card_label = QLabel()
+            card_label.setFixedSize(60, 90)
             card_label.setPixmap(QPixmap("cards_graphic/card_back.png").scaled(60, 90, Qt.KeepAspectRatio, Qt.SmoothTransformation))
             hbox.addWidget(card_label)
             card_labels.append(card_label)
@@ -339,6 +362,7 @@ class BlackjackGameScreen(QWidget):
         # Adjust number of card labels if needed
         while len(bot_widget.card_labels) < len(hand):
             card_label = QLabel()
+            card_label.setFixedSize(60, 90)
             card_label.setPixmap(QPixmap("cards_graphic/card_back.png").scaled(60, 90, Qt.KeepAspectRatio, Qt.SmoothTransformation))
             bot_widget.layout().itemAt(1).layout().addWidget(card_label)
             bot_widget.card_labels.append(card_label)
@@ -361,6 +385,7 @@ class BlackjackGameScreen(QWidget):
         card_labels = []
         for _ in range(2):
             card_label = QLabel()
+            card_label.setFixedSize(80, 120)
             card_label.setPixmap(QPixmap("cards_graphic/card_back.png").scaled(80, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation))
             hbox.addWidget(card_label)
             card_labels.append(card_label)
@@ -374,6 +399,7 @@ class BlackjackGameScreen(QWidget):
         # Adjust number of card labels if needed
         while len(dealer_widget.card_labels) < len(hand):
             card_label = QLabel()
+            card_label.setFixedSize(80, 120)
             card_label.setPixmap(QPixmap("cards_graphic/card_back.png").scaled(80, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation))
             dealer_widget.layout().itemAt(1).layout().addWidget(card_label)
             dealer_widget.card_labels.append(card_label)
@@ -422,6 +448,7 @@ class BlackjackGameScreen(QWidget):
         self.clear_round_message()
         self.had_push_this_round = False
         self.dealer_blackjack_round = False
+        self._prompted_this_round = False
         self.blackjack_game = BlackjackGame(player_names,
                                     action_callback=self.on_action_requested,
                                     phase_callback=self.on_phase,
@@ -487,8 +514,9 @@ class BlackjackGameScreen(QWidget):
             # Show only the first card for each bot
             bot_players = [p for p in players if p.isBot]
             for i, bot in enumerate(bot_players):
-                first_card = [bot.hand[0]] if bot.hand else ["card_back"]
-                cards=[first_card, "card_back"] if len(bot.hand)>1 else first_card
+                # Use strings, not nested lists; show first card and hide second
+                first_card = bot.hand[0] if bot.hand else "card_back"
+                cards = [first_card, "card_back"] if len(bot.hand) > 1 else [first_card]
                 self.update_opponent_hand(i, cards)
             # Show dealer's cards as appropriate
             dealer_hand = data["dealer"]
@@ -535,8 +563,6 @@ class BlackjackGameScreen(QWidget):
             self.had_push_this_round = True
             self.append_round_message(f"{player_info.get('name','Player')} pushes. Bet returned.")
             self.refresh_wallet_label()
-        
-        
         elif phase == "dealer_instant_win_end":
 #            immediate_result = (player,winnings)
             dealerTotal=data[0]
@@ -549,22 +575,12 @@ class BlackjackGameScreen(QWidget):
             # Suppress misleading lose message when a push occurred; otherwise show.
             if not self.had_push_this_round:
                 self.append_round_message(message)
-            self.disable_action_buttons()
-            self.refresh_wallet_label()
-        elif phase == "immediate_end":
-            # Structured summary of an immediate end (dealer/player blackjack)
-            dealer_total = data.get("dealerTotal")
-            hand_results = data.get("handResults", [])
-            lines = [f"Dealer total: {dealer_total}"]
-            if hand_results:
-                for i, hr in enumerate(hand_results, start=1):
-                    lines.append(f"Hand {i}: {hr.get('result','')} | Bet ${hr.get('bet',0)} | Payout ${hr.get('winnings',0)}")
-            else:
-                lines.append("No winning hands.")
-            # Show summary in a dialog (restored per request)
-            QMessageBox.information(self, "Immediate Summary", "\n".join(lines))
-            # Also append to the round message label so prior messages remain visible
-            self.append_round_message("\n".join(lines))
+            # Mark all bots as having lost in this scenario
+            try:
+                for opp in self.opponent_widgets:
+                    opp.bet_label.setText("Lose")
+            except Exception:
+                pass
             self.disable_action_buttons()
             self.refresh_wallet_label()
         
@@ -591,8 +607,17 @@ class BlackjackGameScreen(QWidget):
                 QMessageBox.warning(self, "Funds Error", error_message)
         elif phase == 'round_end':
             # Dealer finished playing out; show final dealer hand and net result
+            dealer_total = None
+            net_winnings = None
+            hand_results = None
             try:
-                dealer_total, net_winnings = data
+                # Support both tuple/list and dict payloads
+                if isinstance(data, (list, tuple)) and len(data) >= 2:
+                    dealer_total, net_winnings = data[0], data[1]
+                elif isinstance(data, dict):
+                    dealer_total = data.get('dealerTotal')
+                    net_winnings = data.get('netWinnings')
+                    hand_results = data.get('handResults')
             except Exception:
                 dealer_total = None
                 net_winnings = None
@@ -601,19 +626,47 @@ class BlackjackGameScreen(QWidget):
             if hasattr(self, 'blackjack_game') and self.blackjack_game:
                 final_dealer_hand = self.blackjack_game.dealer.get_hand()
                 self.update_dealer_hand(final_dealer_hand)
+                # Reveal all bot hands consistently at round end
+                try:
+                    print("DEBUG: Revealing bot hands at round end")
+                    bot_idx = 0
+                    for node in self.blackjack_game.player_nodes:
+                        p = node.player
+                        if getattr(p, 'isBot', False):
+                            hand_to_show = p.hand if getattr(p, 'hand', None) else []
+                            self.update_opponent_hand(bot_idx, hand_to_show)
+                            bot_idx += 1
+                except Exception:
+                    print("DEBUG: Failed to reveal bot hands at round end")
+                    pass
 
-            # Summarize outcome in the round message label
+            # Summarize outcome in the round message label (engine provides final results)
             summary = []
             if dealer_total is not None:
                 summary.append(f"Dealer total: {dealer_total}")
             if net_winnings is not None:
                 summary.append(f"Net winnings: ${net_winnings}")
+            # Build per-hand details: rely on engine-provided results
+            processed_results = hand_results if isinstance(hand_results, list) else []
+            # Enumerate all results; ensure last hand is included
+            #print ("DEBUG processed_results:", processed_results)
+            for i, hr in enumerate(processed_results, start=1):
+                print (f"DEBUG: Hand {i} result data: {hr}")
+                result_text = (hr.get('result') or '').capitalize()
+                bet_val = hr.get('bet', 0)
+                payout_val = hr.get('winnings', 0)
+                summary.append(f"Hand {i}: {result_text} | Bet ${bet_val} | Payout ${payout_val}")
+            print ("DEBUG\n"+ "\n".join(summary))
             if summary:
-                self.append_round_message("\n".join(summary))
+                # Replace any prior update/debug text with the final summary
+                self.show_round_message("\n".join(summary))
 
             # Disable actions and refresh wallet to reflect payouts
             self.disable_action_buttons()
             self.refresh_wallet_label()
+            # Prompt to play again after non-immediate rounds as well, with a short delay
+            if not getattr(self, '_prompted_this_round', False):
+                QTimer.singleShot(1500, self.prompt_play_again)
         
         
         elif phase =="update":
@@ -642,6 +695,7 @@ class BlackjackGameScreen(QWidget):
     def show_round_message(self, text):
         self.round_message_label.setText(text)
         self.round_message_label.show()
+        self.position_round_message()
 
     def clear_round_message(self):
         self.round_message_label.hide()
@@ -655,6 +709,46 @@ class BlackjackGameScreen(QWidget):
             combined = text
         self.round_message_label.setText(combined)
         self.round_message_label.show()
+        self.position_round_message()
+
+    def position_round_message(self):
+        # Overlay the round message relative to the full screen content area
+        try:
+            content_rect = self.rect()
+            margin = 10
+            fm = QFontMetrics(self.round_message_label.font())
+            text = self.round_message_label.text() or ""
+            lines = text.split("\n") if text else [""]
+            # Compute width based on the longest line of text, plus padding/border and small safety fudge
+            longest = max((fm.boundingRect(line).width() for line in lines), default=0)
+            padding_w = 20  # style: padding: 2px 10px -> horizontal total = 20
+            border_w = 2    # style: border: 1px solid -> left+right = 2
+            fudge_w = 3     # small safety to avoid off-by-1 wraps
+            # Ensure a sensible minimum width to avoid excessive wrapping
+            min_w = 220
+            w = min(max(longest + padding_w + border_w + fudge_w, min_w), content_rect.width() - 2 * margin)
+            # Compute height using a QTextDocument for accurate multi-line+wrap layout
+            padding_h = 0
+            doc = QTextDocument()
+            doc.setDefaultFont(self.round_message_label.font())
+            # Inner text width excludes horizontal padding and border
+            doc.setTextWidth(max(0, w - (padding_w + border_w)))
+            doc.setPlainText(text)
+            doc_height = int(doc.size().height())
+            # Avoid clipping: allow up to the available height minus margins
+            h = min(doc_height + padding_h, content_rect.height() - 2 * margin)
+            # Center horizontally in the screen
+            x = (content_rect.width() - w) // 2
+            # Place above the chips: convert chips position to screen coordinates
+            try:
+                chips_top_left = self.chips_widget.mapTo(self, QPoint(0, 0))
+                y = max(margin, chips_top_left.y() - h - margin)
+            except Exception:
+                y = content_rect.height() - h - margin
+            self.round_message_label.setGeometry(x, y, w, h)
+            self.round_message_label.raise_()
+        except Exception:
+            pass
 
     def refresh_wallet_label(self):
         # Update wallet label from the current main player's wallet
@@ -664,7 +758,6 @@ class BlackjackGameScreen(QWidget):
             if main_player_node is not None:
                 self.wallet = main_player_node.player.wallet
                 self.wallet_label.setText(f"Wallet: ${self.wallet}")
-    
     def update_hand_type(self):
         # Get the player's hand and table cards
         player_nodes = self.blackjack_game.player_nodes
@@ -701,6 +794,28 @@ class BlackjackGameScreen(QWidget):
         card_labels[0].setPixmap(QPixmap(f"cards_graphic/{hand[0]}.png").scaled(60, 90, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         card_labels[1].setPixmap(QPixmap(f"cards_graphic/{hand[1]}.png").scaled(60, 90, Qt.KeepAspectRatio, Qt.SmoothTransformation))
     
+    def prompt_play_again(self):
+        self._prompted_this_round = True
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Play Again?")
+        msg.setText("Would you like to play another round?")
+        msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        msg.setDefaultButton(QMessageBox.Yes)
+        result = msg.exec_()
+        if result == QMessageBox.Yes:
+            # Attempt minimal UI reset for opponents
+            try:
+                for opp in getattr(self, "opponent_widgets", []):
+                    if hasattr(opp, "bet_label"):
+                        opp.bet_label.setText("Bet: None")
+                    for lbl in getattr(opp, "card_labels", []):
+                        lbl.setPixmap(QPixmap("cards_graphic/card_back.png").scaled(60, 90, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            except Exception:
+                pass
+            self.start_game()
+        else:
+            # Remain on the Blackjack screen; do nothing further
+            pass
 
 class PokerGameScreen(QWidget):
     def __init__(self, parent=None):
@@ -1135,7 +1250,7 @@ class WelcomeScreen(QWidget):
         super().__init__()
         self.setWindowTitle('Poker Game')
         
-        self.resize(600,300)
+        self.resize(600,500)
         
         layout = QVBoxLayout()
 

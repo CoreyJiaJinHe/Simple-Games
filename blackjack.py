@@ -169,7 +169,8 @@ class BlackJack():
         # Force a pair to easily test split logic
         main_player_node = next(node for node in self.player_nodes if not node.player.isBot)
         main_player = main_player_node.player
-        main_player.hand = ['AC', 'KD']
+        #main_player.hand = ['AC', 'KD']
+        main_player.hand = ['AC', 'AS']
         #self.dealer.hand = ['AC', 'KC']
 
     def fix_hands_and_bets(self):
@@ -249,44 +250,79 @@ class BlackJack():
 
         immediate_win, immediate_result = self.check_immediate_win()
         if immediate_win:
+            # If immediate_result exists, main player has blackjack
+            # Compute dealer total and a consistent handResults + netWinnings payload for GUI
+            dealerTotal = self.evaluator.evaluate_hand(self.dealer.get_hand())
+            main_player = self.get_main_player()
+            hand_results = []
+            net_winnings = 0
+
             if immediate_result:
+                # Main player blackjack: payout is 2.5x bet; net (profit) is 1.5x bet
                 win_player, winnings = immediate_result
+                # Award payout to the player (wallet update)
                 self.award_player(win_player, winnings)
+                # Determine base bet
+                base_bet = 0
+                if getattr(win_player, 'bets', None):
+                    try:
+                        base_bet = win_player.bets[0]
+                    except Exception:
+                        base_bet = 0
+                if not base_bet:
+                    base_bet = getattr(win_player, 'bet', 0) or getattr(win_player, 'current_bet', 0)
+
+                hand_results.append({'result': 'win', 'bet': base_bet, 'winnings': winnings})
+                net_winnings = int(1.5 * base_bet)
+
+                # Log and stats for blackjack win
                 self.db_helper.log_game(
                     "Blackjack",
                     ', '.join([p.name for p in self.players]),
                     win_player.name,
-                    winnings
+                    net_winnings
                 )
                 self.db_helper.update_player_stats(
                     win_player.name,
-                    winnings,
+                    net_winnings,
                     True,
                     winnings
                 )
-            # End round on immediate blackjack: emit summary for GUI and keep backward-compatible phase
-            dealerTotal = self.evaluator.evaluate_hand(self.dealer.get_hand())
+            else:
+                # Dealer blackjack path: push if player also has blackjack, otherwise lose
+                player_blackjack = self.evaluator.is_blackjack(main_player.hand)
+                base_bet = getattr(main_player, 'bet', 0) or getattr(main_player, 'current_bet', 0)
+                if getattr(main_player, 'bets', None):
+                    try:
+                        base_bet = main_player.bets[0]
+                    except Exception:
+                        pass
+                if player_blackjack:
+                    hand_results.append({'result': 'push', 'bet': base_bet, 'winnings': base_bet})
+                    net_winnings = 0
+                else:
+                    hand_results.append({'result': 'lose', 'bet': base_bet, 'winnings': 0})
+                    net_winnings = -base_bet
+
+                # Log and stats for dealer blackjack outcome
+                self.db_helper.log_game(
+                    "Blackjack",
+                    ', '.join([p.name for p in self.players]),
+                    main_player.name,
+                    net_winnings
+                )
+                self.db_helper.update_player_stats(
+                    main_player.name,
+                    net_winnings,
+                    net_winnings > 0,
+                    base_bet if player_blackjack else 0
+                )
+
+            # Emit a single, consistent round_end for immediate scenarios
             if self.phase_callback:
-                if backward_phase == "round_end":
-                    # Backward-compatible phase for CLI path
-                    self.phase_callback("round_end", [dealerTotal, 0])
-                # Structured summary
-                hand_results = []
-                if immediate_result:
-                    win_player, winnings = immediate_result
-                    # Robustly determine base bet for display
-                    base_bet = 0
-                    if getattr(win_player, 'bets', None):
-                        try:
-                            base_bet = win_player.bets[0]
-                        except Exception:
-                            base_bet = 0
-                    if not base_bet:
-                        base_bet = getattr(win_player, 'bet', 0) or getattr(win_player, 'current_bet', 0)
-                    hand_results.append({'result': 'win', 'bet': base_bet, 'winnings': winnings})
-                self.phase_callback("immediate_end", {
+                self.phase_callback("round_end", {
                     'dealerTotal': dealerTotal,
-                    'mainPlayer': {'name': main_player_name},
+                    'netWinnings': net_winnings,
                     'handResults': hand_results
                 })
             return True
@@ -402,7 +438,12 @@ class BlackJack():
                 if res['winnings'] > 0:
                     self.award_player(main_player, res['winnings'])
             if self.phase_callback:
-                self.phase_callback("round_end", [dealerTotal, net_winnings])
+                # Provide structured data including per-hand results for UI overlay
+                self.phase_callback("round_end", {
+                    'dealerTotal': dealerTotal,
+                    'netWinnings': net_winnings,
+                    'handResults': hand_results
+                })
             # Log results
             self.db_helper.log_game(
                 "Blackjack",
