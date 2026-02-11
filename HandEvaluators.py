@@ -179,6 +179,7 @@ class BlackjackHandEvaluator():
 
     def is_blackjack(self, hand):
         status = self.evaluate_hand(hand)
+        #print (f"Evaluating hand: {hand}, Total value: {status}, Length: {len(hand)}")
         if (status == 21 and len(hand) == 2):
             return True
         return False

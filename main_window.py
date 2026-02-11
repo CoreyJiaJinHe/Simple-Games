@@ -231,6 +231,14 @@ class BlackjackGameScreen(QWidget):
         center_col_widget = QWidget()
         center_col_widget.setLayout(center_col_layout)
         table_area.addWidget(center_col_widget, 1, 1, alignment=Qt.AlignCenter)
+        # --- Round message label (under chips) ---
+        self.round_message_label = QLabel("")
+        self.round_message_label.setAlignment(Qt.AlignCenter)
+        self.round_message_label.setFont(QFont('Arial', 18))
+        self.round_message_label.setStyleSheet("color: #111;")
+        self.round_message_label.hide()
+        center_col_layout.addSpacing(10)
+        center_col_layout.addWidget(self.round_message_label, alignment=Qt.AlignCenter)
         
         # --- Combine cards and buttons horizontally ---
         # cards_and_buttons_layout = QHBoxLayout()
@@ -266,6 +274,9 @@ class BlackjackGameScreen(QWidget):
         self.setLayout(layout)
         
         self.db_helper=DBHelper()
+        # Round-state flags
+        self.had_push_this_round = False
+        self.dealer_blackjack_round = False
     def resizeEvent(self, event):
         # Ensure the background frame always fills the PokerGameScreen
         self.bg_frame.setGeometry(self.rect())
@@ -407,6 +418,10 @@ class BlackjackGameScreen(QWidget):
     def start_game(self):
         player_names = [self.player_name] + [f"Bot{i}" for i in range(1, self.bot_count + 1)]
         self.active_hand_index=0
+        # Reset round message and flags
+        self.clear_round_message()
+        self.had_push_this_round = False
+        self.dealer_blackjack_round = False
         self.blackjack_game = BlackjackGame(player_names,
                                     action_callback=self.on_action_requested,
                                     phase_callback=self.on_phase,
@@ -478,6 +493,50 @@ class BlackjackGameScreen(QWidget):
             # Show dealer's cards as appropriate
             dealer_hand = data["dealer"]
             self.update_dealer_hand(dealer_hand)
+        elif phase == "dealer_blackjack":
+            # Dealer has blackjack. Reveal dealer and all player hands; annotate outcomes.
+            dealer_hand = data.get("dealerHand", [])
+            self.update_dealer_hand(dealer_hand)
+            players_info = data.get("players") or data.get("players_info", [])
+
+            # Update main player's hand
+            main_info = next((pi for pi in players_info if not pi.get("isBot", False)), None)
+            if main_info and main_info.get("hand"):
+                self.set_hands([main_info["hand"]], 0)
+
+            # Reveal bot hands and mark push/lose
+            bot_idx = 0
+            for pi in players_info:
+                if pi.get("isBot", False):
+                    hand = pi.get("hand", [])
+                    self.update_opponent_hand(bot_idx, hand)
+                    # Annotate outcome on bet label
+                    outcome_text = "Push" if pi.get("hasBlackjack", False) else "Lose"
+                    self.opponent_widgets[bot_idx].bet_label.setText(outcome_text)
+                    bot_idx += 1
+
+            self.disable_action_buttons()
+            self.dealer_blackjack_round = True
+            self.append_round_message("Dealer has blackjack. Resolving outcomes...")
+        elif phase == "player_blackjack":
+            # Main player has blackjack and wins immediately.
+            player_info = data.get("player", {})
+            winnings = data.get("winnings", 0)
+            hand = data.get("hand", [])
+            if hand:
+                self.set_hands([hand], 0)
+            self.disable_action_buttons()
+            self.append_round_message(f"{player_info.get('name','Player')} wins ${winnings}.")
+            self.refresh_wallet_label()
+        elif phase == "push_result":
+            # Main player pushes vs dealer blackjack; bet returned.
+            player_info = data.get("player", {})
+            self.disable_action_buttons()
+            self.had_push_this_round = True
+            self.append_round_message(f"{player_info.get('name','Player')} pushes. Bet returned.")
+            self.refresh_wallet_label()
+        
+        
         elif phase == "dealer_instant_win_end":
 #            immediate_result = (player,winnings)
             dealerTotal=data[0]
@@ -487,9 +546,30 @@ class BlackjackGameScreen(QWidget):
                 message = f"Player {player.name} wins. Winnings: {winnings}"
             else:
                 message = f"Dealer has blackjack with total {dealerTotal}. All players lose."
+            # Suppress misleading lose message when a push occurred; otherwise show.
+            if not self.had_push_this_round:
+                self.append_round_message(message)
+            self.disable_action_buttons()
+            self.refresh_wallet_label()
+        elif phase == "immediate_end":
+            # Structured summary of an immediate end (dealer/player blackjack)
+            dealer_total = data.get("dealerTotal")
+            hand_results = data.get("handResults", [])
+            lines = [f"Dealer total: {dealer_total}"]
+            if hand_results:
+                for i, hr in enumerate(hand_results, start=1):
+                    lines.append(f"Hand {i}: {hr.get('result','')} | Bet ${hr.get('bet',0)} | Payout ${hr.get('winnings',0)}")
+            else:
+                lines.append("No winning hands.")
+            # Show summary in a dialog (restored per request)
+            QMessageBox.information(self, "Immediate Summary", "\n".join(lines))
+            # Also append to the round message label so prior messages remain visible
+            self.append_round_message("\n".join(lines))
+            self.disable_action_buttons()
+            self.refresh_wallet_label()
         
         # returned data: {"name":..., "hands":..., "bets":..., "hand_index": ...}
-        if phase in ("player_action", "hit", "stand", "double_down", "surrender", "split", "bust", "update"):
+        if phase in ("player_action", "hit", "stand", "double_down", "surrender", "split", "bust"):
             # Keep hand highlights in sync with engine
             if data is not None and "hands" in data:
                 hands = data["hands"] if data["hands"] else [self.blackjack_game.players[0].hand]
@@ -509,30 +589,81 @@ class BlackjackGameScreen(QWidget):
             elif phase == "funds_error":
                 error_message = "You don't have enough funds to make that bet."
                 QMessageBox.warning(self, "Funds Error", error_message)
-        elif phase == 'showdown':
-            pass
-        #     if data is None:
-        #         print("Showdown phase called with data=None!")
-        #     if data is not None:
-        #         bot_hands = []
-        #         for player in data[1:]:  # Exclude human player
-        #             if player is not None and player.hand is not None:
-        #                 bot_hands.append(player.hand)
-        #             else:
-        #                 # Fallback: show card backs if hand is missing
-        #                 bot_hands.append(['card_back', 'card_back'])
-        #         self.reveal_all_bot_hands(bot_hands)
-        #     #self.reveal_all_bot_hands([player.hand for player in data[1:]])  # Exclude human player
-        # elif phase == 'winner':
-        #     winner_name, winning_hand, pot = data
-        #     self.show_game_result_prompt(winner_name, pot)
-        # # Update hand type after each phase
+        elif phase == 'round_end':
+            # Dealer finished playing out; show final dealer hand and net result
+            try:
+                dealer_total, net_winnings = data
+            except Exception:
+                dealer_total = None
+                net_winnings = None
+
+            # Update dealer hand to the final state
+            if hasattr(self, 'blackjack_game') and self.blackjack_game:
+                final_dealer_hand = self.blackjack_game.dealer.get_hand()
+                self.update_dealer_hand(final_dealer_hand)
+
+            # Summarize outcome in the round message label
+            summary = []
+            if dealer_total is not None:
+                summary.append(f"Dealer total: {dealer_total}")
+            if net_winnings is not None:
+                summary.append(f"Net winnings: ${net_winnings}")
+            if summary:
+                self.append_round_message("\n".join(summary))
+
+            # Disable actions and refresh wallet to reflect payouts
+            self.disable_action_buttons()
+            self.refresh_wallet_label()
+        
         
         elif phase =="update":
-            pass
-            # player_hands = data["hands"]  # List of lists, e.g. [["AS", "10H"], ["8D", "3C"]]
-            # self.active_hand_index = data.get("hand_index", 0)
+            # After completing a hand via stand/surrender, move to the next split hand
+            name = (data or {}).get("name", "Player")
+            hands = (data or {}).get("hands") or []
+            bets = (data or {}).get("bets") or []
+            idx = (data or {}).get("hand_index", 0)  # next active hand index
+            total_hands = len(hands) if hands else 1
+
+            # Replace the round message (do not append for update)
+            if idx < total_hands:
+                current_bet = bets[idx] if (bets and idx < len(bets)) else None
+                bet_text = f" | Bet: ${current_bet}" if current_bet is not None else ""
+                self.show_round_message(f"{name}: Next hand ({idx+1}/{total_hands}){bet_text}.")
+            else:
+                self.show_round_message(f"{name}: All hands completed.")
+
+            # Reflect the new active hand and pause inputs until next prompt
+            if hands:
+                self.active_hand_index = idx
+                self.set_hands(hands, self.active_hand_index)
+            self.disable_action_buttons()
         self.update_hand_type()
+
+    def show_round_message(self, text):
+        self.round_message_label.setText(text)
+        self.round_message_label.show()
+
+    def clear_round_message(self):
+        self.round_message_label.hide()
+        self.round_message_label.setText("")
+
+    def append_round_message(self, text):
+        existing = self.round_message_label.text() or ""
+        if existing:
+            combined = existing + "\n" + text
+        else:
+            combined = text
+        self.round_message_label.setText(combined)
+        self.round_message_label.show()
+
+    def refresh_wallet_label(self):
+        # Update wallet label from the current main player's wallet
+        if hasattr(self, 'blackjack_game') and self.blackjack_game:
+            player_nodes = self.blackjack_game.player_nodes
+            main_player_node = next((node for node in player_nodes if not node.player.isBot), None)
+            if main_player_node is not None:
+                self.wallet = main_player_node.player.wallet
+                self.wallet_label.setText(f"Wallet: ${self.wallet}")
     
     def update_hand_type(self):
         # Get the player's hand and table cards
@@ -542,7 +673,7 @@ class BlackjackGameScreen(QWidget):
         player_hands=main_player.hands if main_player.hands else [main_player.hand]
         self.set_hands(player_hands, self.active_hand_index)
         # Use Blackjack's evaluate_hand
-        print(f"Evaluating hand for {main_player.name}. Hands: {main_player.hands}, Bets: {main_player.bets}, Active hand index: {self.active_hand_index}")
+        print(f"DEBUG: Evaluating hand for {main_player.name}. Hands: {main_player.hands}, Bets: {main_player.bets}, Active hand index: {self.active_hand_index}")
         if not main_player.hands:
             hand = main_player.hand
         else:

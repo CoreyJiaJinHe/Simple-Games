@@ -33,6 +33,7 @@ class BlackjackDealer(Dealer):
         print(f"Dealer's hand: {show_substituted(self.get_hand())}")
 
 class BlackJack():
+    # --- Initialization & Helpers ---
     def __init__(self, player_names,
                  action_callback=None,
                  phase_callback=None,
@@ -77,37 +78,36 @@ class BlackJack():
         self.current_player_index = 0
         self.current_hand_index = 0
         self.awaiting_initial_bet = False
-        
-    def deal_initial_hands(self):
-        for _ in range(2):
-            for player in self.players:
-                player.request_card(self.dealer)
-            self.dealer.deal_self()
-        
 
-    def fix_hands_and_bets(self):
-        for player in self.players:
-            if not player.hands:
-                player.hands = [player.hand]
-                player.bets = [player.bet]
-    
-    def show_hands(self):
-        for player in self.players:
-            print(f"{player.name}'s hand: {show_substituted(player.hand)}")
-            
-        
-    def show_only_player_hand(self):
-        main_player_node = next(node for node in self.player_nodes if not node.player.isBot)
-        main_player = main_player_node.player
-        print(f"{main_player.name}'s hand: {show_substituted(main_player.hand)}")
-        return main_player.hand
+    def get_main_player_node(self):
+        # Helper to retrieve the non-bot (human) player's node
+        return next(node for node in self.player_nodes if not node.player.isBot)
 
-    def debug_hand(self):
-        # Force a pair to easily test split logic
-        main_player_node = next(node for node in self.player_nodes if not node.player.isBot)
-        main_player = main_player_node.player
-        main_player.hand = ['AH', 'AD']
-    
+    def get_main_player(self):
+        # Helper to retrieve the non-bot (human) player
+        return self.get_main_player_node().player
+
+    # --- Game Start & Initial Phases ---
+    def start_game(self):
+        # Begin with initial betting round. In GUI mode, pause until initial_bet_received is called.
+        self.initial_betting_round()
+        if self.action_callback:
+            # GUI: wait for initial_bet_received to continue
+            return
+
+        # CLI flow continues immediately
+        if self._after_initial_deal_and_immediate_handling(backward_phase="round_end", main_player_name=self.get_main_player().name):
+            return
+
+        # Only prompt the main player (non-bot)
+        main_player = self.get_main_player()
+        if not main_player.hands:
+            main_player.hands = [main_player.hand]
+            main_player.bets = [main_player.bet]
+
+        #Continue playing
+        self.request_player_action(main_player, 0)
+
     def initial_betting_round(self):
         active_players = [n for n in self.player_nodes if not n.player.isFolded and n.player.wallet > 0]
         for node in active_players:
@@ -132,10 +132,9 @@ class BlackJack():
                 else:
                     # CLI fallback: set minimum bet immediately
                     player.set_bet(self.minimum_bet)
-        
-    
+
     def initial_bet_received(self, bet: int):
-        player= next(node for node in self.player_nodes if not node.player.isBot).player
+        player = self.get_main_player()
         if player.add_bet(bet):
             print(f"{player.name} has placed a bet of {bet}. Current bet: {player.current_bet}. Remaining funds: {player.wallet}")
             if self.pot_update_callback:
@@ -148,12 +147,106 @@ class BlackJack():
 
         # Resume round for GUI flow after receiving initial bet
         self.awaiting_initial_bet = False
+        # Centralized initial-deal + immediate outcome handling (GUI path)
+        if self._after_initial_deal_and_immediate_handling(backward_phase=None, main_player_name=player.name):
+            return
+
+        # Event-driven: prompt only the main (non-bot) player, starting with hand 0
+        main_player = player
+        # Ensure hands structure exists
+        if not main_player.hands:
+            main_player.hands = [main_player.hand]
+            main_player.bets = [main_player.bet]
+        self.request_player_action(main_player, 0)
+
+    def deal_initial_hands(self):
+        for _ in range(2):
+            for player in self.players:
+                player.request_card(self.dealer)
+            self.dealer.deal_self()
+
+    def debug_hand(self):
+        # Force a pair to easily test split logic
+        main_player_node = next(node for node in self.player_nodes if not node.player.isBot)
+        main_player = main_player_node.player
+        main_player.hand = ['AC', 'KD']
+        #self.dealer.hand = ['AC', 'KC']
+
+    def fix_hands_and_bets(self):
+        for player in self.players:
+            if not player.hands:
+                player.hands = [player.hand]
+                player.bets = [player.bet]
+
+    def check_immediate_win(self) -> tuple:
+        # Check for dealer blackjack first
+        dealer_blackjack = self.evaluator.is_blackjack(self.dealer.hand)
+        immediate_result = None  # (player, winnings) for main player when applicable
+        if dealer_blackjack:
+            print("Dealer has blackjack!")
+            # Inform GUI of dealer blackjack state
+            if self.phase_callback:
+                players_info = []
+                for p in self.players:
+                    players_info.append({
+                        'name': p.name,
+                        'isBot': p.isBot,
+                        'hasBlackjack': self.evaluator.is_blackjack(p.hand),
+                        'hand': p.hand
+                    })
+                self.phase_callback('dealer_blackjack', {
+                    'dealerHand': self.dealer.get_hand(),
+                    'players': players_info
+                })
+            # Apply outcomes
+            for player in self.players:
+                player_blackjack = self.evaluator.is_blackjack(player.hand)
+                if player_blackjack:
+                    print(f"{player.name} also has blackjack! It's a push.")
+                    player.return_bet()
+                    # Explicitly inform GUI of push result for main player
+                    if self.phase_callback and not player.isBot:
+                        self.phase_callback('push_result', {
+                            'player': {'name': player.name, 'isBot': False},
+                            'hand': player.hand,
+                            'result': 'push'
+                        })
+                else:
+                    print(f"{player.name} loses to dealer blackjack.")
+            return True, None
+        else:
+            # Detect player blackjack across players
+            for player in list(self.players):
+                player_blackjack = self.evaluator.is_blackjack(player.hand)
+                if player_blackjack:
+                    winnings = 1.5 * player.bet + player.bet
+                    print(f"{player.name} has blackjack and wins 1.5x their bet!")
+                    if self.phase_callback and not player.isBot:
+                        self.phase_callback('player_blackjack', {
+                            'player': {'name': player.name, 'isBot': False},
+                            'hand': player.hand,
+                            'winnings': winnings
+                        })
+                    immediate_result = (player, winnings)
+                    # Remove from further play
+                    self.players.remove(player)
+                    if not player.isBot:
+                        return True, immediate_result
+        return False, None
+
+    def _after_initial_deal_and_immediate_handling(self, backward_phase: str = None, main_player_name: str = "") -> bool:
+        """
+        Centralized handler for initial deal, debug setup for split testing,
+        emitting 'initial_deal', and processing immediate blackjack outcomes.
+        Returns True if the round ends immediately due to blackjack; else False.
+        """
         self.deal_initial_hands()
         # Keep debug_hand for split testing
         self.debug_hand()
         self.fix_hands_and_bets()
         if self.phase_callback:
             self.phase_callback("initial_deal", {"players": self.players, "dealer": self.dealer.get_hand()})
+
         immediate_win, immediate_result = self.check_immediate_win()
         if immediate_win:
             if immediate_result:
@@ -171,48 +264,35 @@ class BlackJack():
                     True,
                     winnings
                 )
-            # End round on immediate blackjack
+            # End round on immediate blackjack: emit summary for GUI and keep backward-compatible phase
+            dealerTotal = self.evaluator.evaluate_hand(self.dealer.get_hand())
             if self.phase_callback:
-                dealerTotal = self.evaluator.evaluate_hand(self.dealer.get_hand())
-                self.phase_callback("dealer_instant_win_end", [dealerTotal, immediate_result])
-            return
+                if backward_phase == "round_end":
+                    # Backward-compatible phase for CLI path
+                    self.phase_callback("round_end", [dealerTotal, 0])
+                # Structured summary
+                hand_results = []
+                if immediate_result:
+                    win_player, winnings = immediate_result
+                    # Robustly determine base bet for display
+                    base_bet = 0
+                    if getattr(win_player, 'bets', None):
+                        try:
+                            base_bet = win_player.bets[0]
+                        except Exception:
+                            base_bet = 0
+                    if not base_bet:
+                        base_bet = getattr(win_player, 'bet', 0) or getattr(win_player, 'current_bet', 0)
+                    hand_results.append({'result': 'win', 'bet': base_bet, 'winnings': winnings})
+                self.phase_callback("immediate_end", {
+                    'dealerTotal': dealerTotal,
+                    'mainPlayer': {'name': main_player_name},
+                    'handResults': hand_results
+                })
+            return True
+        return False
 
-        # Event-driven: prompt only the main (non-bot) player, starting with hand 0
-        main_player = player
-        # Ensure hands structure exists
-        if not main_player.hands:
-            main_player.hands = [main_player.hand]
-            main_player.bets = [main_player.bet]
-        self.request_player_action(main_player, 0)
-
-    
-    def check_immediate_win(self) -> tuple:
-        # Check for dealer blackjack first
-        dealer_blackjack =self.evaluator.is_blackjack(self.dealer.hand)
-        immediate_result = None  # Will hold (player, winnings) if a player wins
-        if dealer_blackjack:
-            print("Dealer has blackjack!")
-            for player in self.players:
-                player_blackjack = self.evaluator.is_blackjack(player.hand)
-                if player_blackjack:
-                    print(f"{player.name} also has blackjack! It's a push.")
-                    player.return_bet()
-                else:
-                    print(f"{player.name} loses to dealer blackjack.")
-            return True, None
-        else:
-            for player in self.players:
-                player_blackjack = self.evaluator.is_blackjack(player.hand)
-                if player_blackjack:
-                    winnings = 1.5 * player.bet + player.bet
-                    print(f"{player.name} has blackjack and wins 1.5x their bet!")
-                    immediate_result = (player, winnings)
-                    self.players.remove(player)  # Remove player from further play
-                    if not player.isBot:
-                        return True, immediate_result
-        return False, None
-    
-    
+    # --- Player Action Flow ---
     def get_action_options(self, player: Player, hand_index: int):
         if not player.hands:
             hand = player.hand
@@ -247,7 +327,6 @@ class BlackJack():
             self.cli_player_action(player, hand_index)
             
         
-    
     def process_player_action(self, player: Player, hand_index: int, action: str):
         if not player.hands:
             hand = player.hand
@@ -305,20 +384,20 @@ class BlackJack():
             if hand_index + 1 < len(player.hands):
                 print(f"Moving to next hand for {player.name}.")
                 hand_index+=1
+                if self.phase_callback:
+                    self.phase_callback("update", {"name":player.name, "hands":player.hands, "bets":player.bets, "hand_index": hand_index})
+                
                 if self.action_callback:
                     self.request_player_action(player, hand_index)
                 else:
                     self.cli_player_action(player, hand_index)
-                if self.phase_callback:
-                    self.phase_callback("update", {"name":player.name, "hands":player.hands, "bets":player.bets, "hand_index": hand_index})
                 return
             
             # Done with all hands for this player: proceed to dealer and settle
             self.dealer.play_out(self.evaluator)
             hand_results, net_winnings, dealerTotal, total_payout = self.determine_winner()
             # Award payouts to main player based on results
-            main_player_node = next(node for node in self.player_nodes if not node.player.isBot)
-            main_player = main_player_node.player
+            main_player = self.get_main_player()
             for res in hand_results:
                 if res['winnings'] > 0:
                     self.award_player(main_player, res['winnings'])
@@ -345,25 +424,6 @@ class BlackJack():
             else:
                 self.cli_player_action(player, hand_index)
         # If the hand is finished, just return to let the main loop advance to the next hand/player
-        
-
-
-
-    # CLI fallback for player action
-    def cli_player_action(self, player: Player, hand_index: int):
-        if player.isBot:
-        # Let the bot logic handle the action automatically
-            #self.bot_play_hand(player, hand_index)
-            return
-        
-        hand, options = self.get_action_options(player, hand_index)
-        print(f"{player.name}'s hand: {show_substituted(hand)}. The hand total is: {self.evaluator.evaluate_hand(hand)}")
-        print(f"Options: {', '.join(options)}")
-        action = input("Choose action: ").strip().lower()
-        self.process_player_action(player, hand_index, action)
-    
-    
-    # def decide_player_actions(self, player: Player):
 
     def handle_split(self, player: Player, hand_index: int):
         hand = player.hands[hand_index]
@@ -399,63 +459,28 @@ class BlackJack():
             if remove_suit([card1])[0] == remove_suit([card2])[0]:
                 return True
         return False
-    
+
     def prompt_next_action(self):
         # Retained for future multi-player support; not used in main-player-only flow
         if not self.active_players:
             return
         player = self.active_players[self.current_player_index].player
         self.request_player_action(player, self.current_hand_index)
-    
-    
-    
-    def start_game(self):
-        # Begin with initial betting round. In GUI mode, pause until initial_bet_received is called.
-        self.initial_betting_round()
-        if self.action_callback:
-            # GUI: wait for initial_bet_received to continue
+
+    # --- CLI Fallback ---
+    def cli_player_action(self, player: Player, hand_index: int):
+        if player.isBot:
+        # Let the bot logic handle the action automatically
+            #self.bot_play_hand(player, hand_index)
             return
-
-        # CLI flow continues immediately
-        self.deal_initial_hands()
-        # Keep debug_hand for split testing
-        self.debug_hand()
-        self.fix_hands_and_bets()
-        if self.phase_callback:
-            self.phase_callback("initial_deal", {"players": self.players, "dealer": self.dealer.get_hand()})
-
-        immediate_win, immediate_result = self.check_immediate_win()
-        if immediate_win:
-            if immediate_result:
-                win_player, winnings = immediate_result
-                self.award_player(win_player, winnings)
-                self.db_helper.log_game(
-                    "Blackjack",
-                    ', '.join([p.name for p in self.players]),
-                    win_player.name,
-                    winnings
-                )
-                self.db_helper.update_player_stats(
-                    win_player.name,
-                    winnings,
-                    True,
-                    winnings
-                )
-            if self.phase_callback:
-                dealerTotal = self.evaluator.evaluate_hand(self.dealer.get_hand())
-                self.phase_callback("round_end", [dealerTotal, 0])
-            return
-
-        # Only prompt the main player (non-bot)
-        main_player_node = next(node for node in self.player_nodes if not node.player.isBot)
-        main_player = main_player_node.player
-        if not main_player.hands:
-            main_player.hands = [main_player.hand]
-            main_player.bets = [main_player.bet]
-
-        self.request_player_action(main_player, 0)
         
+        hand, options = self.get_action_options(player, hand_index)
+        print(f"{player.name}'s hand: {show_substituted(hand)}. The hand total is: {self.evaluator.evaluate_hand(hand)}")
+        print(f"Options: {', '.join(options)}")
+        action = input("Choose action: ").strip().lower()
+        self.process_player_action(player, hand_index, action)
 
+    # --- Outcomes & Utilities ---
     def determine_winner(self):
         dealerTotal = self.evaluator.evaluate_hand(self.dealer.get_hand())
         player_node = next(node for node in self.player_nodes if not node.player.isBot)
@@ -470,7 +495,7 @@ class BlackJack():
                 playerTotal = self.evaluator.evaluate_hand(hand)
                 result = None
                 winnings = 0
-                if playerTotal > dealerTotal or dealerTotal > 21:
+                if playerTotal > dealerTotal and playerTotal <= 21 or dealerTotal > 21:
                     result = 'win'
                     winnings = player.bets[i] * 2
                     net_winnings += player.bets[i]
@@ -488,7 +513,7 @@ class BlackJack():
                 hand_results.append({'result': result, 'bet': player.bets[i], 'winnings': winnings})
         else:
             playerTotal = self.evaluator.evaluate_hand(player.hand)
-            if playerTotal > dealerTotal and playerTotal < 22 or dealerTotal > 21 and playerTotal <= 21:
+            if playerTotal > dealerTotal and playerTotal <= 21 or dealerTotal > 21 and playerTotal <= 21:
                 net_winnings = player.bet
                 total_payout = player.bet * 2
                 print(f"{player.name} wins with total {playerTotal} against dealer's {dealerTotal}! Wins {player.bet * 2}.")
@@ -502,6 +527,7 @@ class BlackJack():
 
         # Return overall result
         return hand_results, net_winnings, dealerTotal, total_payout    
+
     def award_player(self,player : Player,bet: int):
         player.win_bet(bet)
         
@@ -521,6 +547,16 @@ class BlackJack():
                     if playerTotal > dealerTotal or dealerTotal > 21:
                         winners.append(player.name)
         return winners
+
+    def show_hands(self):
+        for player in self.players:
+            print(f"{player.name}'s hand: {show_substituted(player.hand)}")
+            
+    def show_only_player_hand(self):
+        main_player_node = next(node for node in self.player_nodes if not node.player.isBot)
+        main_player = main_player_node.player
+        print(f"{main_player.name}'s hand: {show_substituted(main_player.hand)}")
+        return main_player.hand
         
 if __name__ == "__main__":
     game = BlackJack(player_names=["You", "Bot1", "Bot2"])
