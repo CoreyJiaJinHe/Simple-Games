@@ -45,12 +45,19 @@ class MainWindow(QWidget):
         layout = QVBoxLayout()
         layout.addWidget(self.stacked_widget)
         self.setLayout(layout)
+        
+        self.show_welcome_screen()
 
     def show_welcome_screen(self):
         self.stacked_widget.setCurrentWidget(self.welcome_screen)
         # Hide outer frames
         self.outer_frame.hide()
         self.middle_frame.hide()
+        # Set a small fixed size for the welcome screen
+        self.setMinimumSize(0, 0)
+        self.setMaximumSize(600, 600)
+        self.resize(420, 320)
+        self.setFixedSize(420, 320)
         
     def show_blackjack_game_screen(self, player_name="You", bot_count=2):
         print(f"Starting Blackjack game for {player_name} with {bot_count} bots")
@@ -61,7 +68,8 @@ class MainWindow(QWidget):
         self.blackjack_game_screen.set_bot_count(bot_count)
         self.blackjack_game_screen.set_player_name(player_name)
         self.blackjack_game_screen.start_game()
-        # Respect the Blackjack screen's minimum size to avoid squishing
+        # Remove fixed size and resize to fit game content
+        self.setFixedSize(0, 0)
         try:
             self.setMinimumSize(self.blackjack_game_screen.sizeHint())
         except Exception:
@@ -80,12 +88,25 @@ class MainWindow(QWidget):
         self.poker_game_screen.set_player_name(player_name)
         self.poker_game_screen.set_bot_count(bot_count)
         self.stacked_widget.setCurrentWidget(self.poker_game_screen)
-        self.poker_game_screen.start_game()
         # Outermost border (red)
         self.outer_frame.show()
         # Middle border (black)
         self.middle_frame.show()
-        # Fit window to content after screen switch
+        # Remove fixed size and resize to fit game content based on initial layout
+        self.setFixedSize(0, 0)
+        try:
+            self.setMinimumSize(self.poker_game_screen.sizeHint())
+        except Exception:
+            pass
+        self.adjustSize()
+        try:
+            self.resize(self.minimumSize())
+        except Exception:
+            pass
+        # Now start the game; later card additions won't shrink the window
+        # below the size needed for all five dealer/community cards.
+        self.poker_game_screen.start_game()
+        # Let Qt compute an appropriate initial size based on content
         self.adjustSize()
         
         
@@ -158,7 +179,7 @@ class BlackjackGameScreen(QWidget):
         self.hand_card_labels = []  # List of lists: one list of QLabel per hand
 
         # For debugging: set initial hands
-        self.set_hands([["AS", "10H"], ["8D", "3C", "7S"], ["4H", "5D"]])  # Example: three hands
+        #self.set_hands([["AS", "10H"], ["8D", "3C", "7S"], ["4H", "5D"]])  # Example: three hands
 
         # --- Betting buttons stacked vertically ---
         buttons_layout = QVBoxLayout()
@@ -294,6 +315,7 @@ class BlackjackGameScreen(QWidget):
         # Round-state flags
         self.had_push_this_round = False
         self.dealer_blackjack_round = False
+        
     def resizeEvent(self, event):
         # Ensure the background frame always fills the PokerGameScreen
         self.bg_frame.setGeometry(self.rect())
@@ -394,6 +416,7 @@ class BlackjackGameScreen(QWidget):
         widget.setLayout(vbox)
         widget.card_labels = card_labels  # Attach for dynamic updates
         return widget
+    
     def update_dealer_hand(self, hand):
         dealer_widget=self.dealer_widget
         # Adjust number of card labels if needed
@@ -857,9 +880,7 @@ class PokerGameScreen(QWidget):
         bet_input_layout = QHBoxLayout()
         bet_input_layout.addWidget(bet_label)
         bet_input_layout.addWidget(self.bet_input)
-        # bet_input_widget = QWidget()
-        # bet_input_widget.setLayout(bet_input_layout)
-
+        
         self.bet_error_label = QLabel("")
         self.bet_error_label.setStyleSheet("color: red;")
         
@@ -942,7 +963,10 @@ class PokerGameScreen(QWidget):
         self.table_card_labels = []
         for _ in range(5):
             card_label = QLabel()
-            card_label.setPixmap(QPixmap("cards_graphic/card_back.png").scaled(40, 60, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            # Reserve space for each community card from the start so
+            # the layout (and thus the window) always accounts for all 5.
+            card_label.setFixedSize(80, 120)
+            card_label.setPixmap(QPixmap("cards_graphic/card_back.png").scaled(80, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation))
             self.table_card_labels.append(card_label)
             table_cards_layout.addWidget(card_label)
         self.table_cards_widget.setLayout(table_cards_layout)
@@ -990,7 +1014,13 @@ class PokerGameScreen(QWidget):
         layout.addWidget(cards_and_buttons_widget, alignment=Qt.AlignCenter)
 
         
+        # Prevent squishing: enforce minimum size equal to layout's size hint
+        layout.setSizeConstraint(QLayout.SetMinimumSize)
         self.setLayout(layout)
+        try:
+            self.setMinimumSize(self.sizeHint())
+        except Exception:
+            pass
         
         self.db_helper=DBHelper()
         
@@ -1099,13 +1129,13 @@ class PokerGameScreen(QWidget):
         elif phase =='flop':
             # Update table cards display
             for i in range(3):
-                self.table_card_labels[i].setPixmap(QPixmap(f"cards_graphic/{data[i]}.png").scaled(40, 60, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                self.table_card_labels[i].setPixmap(QPixmap(f"cards_graphic/{data[i]}.png").scaled(80, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         elif phase == 'turn':
             card = data[-1]  # The new turn card
-            self.table_card_labels[3].setPixmap(QPixmap(f"cards_graphic/{card}.png").scaled(40, 60, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            self.table_card_labels[3].setPixmap(QPixmap(f"cards_graphic/{card}.png").scaled(80, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         elif phase == 'river':
             card = data[-1]  # The new river card
-            self.table_card_labels[4].setPixmap(QPixmap(f"cards_graphic/{card}.png").scaled(40, 60, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            self.table_card_labels[4].setPixmap(QPixmap(f"cards_graphic/{card}.png").scaled(80, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         elif phase == 'showdown':
             if data is None:
                 print("Showdown phase called with data=None!")
@@ -1137,9 +1167,7 @@ class PokerGameScreen(QWidget):
             self.reset_bot_cards()
             self.start_game()
         else:
-            self.reset_bot_cards()
-            self.close()  # Or self.close() if PokerGameScreen is the main window
-            self.main_window.show_welcome_screen()
+            pass
             
     def reset_bot_cards(self):
         for bot_widget in self.opponent_widgets:
@@ -1250,15 +1278,24 @@ class WelcomeScreen(QWidget):
         super().__init__()
         self.setWindowTitle('Poker Game')
         
-        self.resize(600,500)
+        self.resize(600,200)
         
         layout = QVBoxLayout()
 
-        titleLabel = QLabel('Welcome to Poker!', self)
-        titleLabel.setFont(QFont('Times New Roman', 64))
+        titleLabel = QLabel('Welcome to Card Games!', self)
+        titleLabel.setFont(QFont('Times New Roman', 28))
         
+        user_layout = QVBoxLayout()
+        user_widget = QWidget()
+        user_widget.setLayout(user_layout)
+        user_widget.setMaximumWidth(260)
+        user_widget.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        user_label = QLabel("Player Name:", self)
+        user_label.setFont(QFont('Arial', 16))
+        user_layout.addWidget(user_label)
         self.name_input = QLineEdit(self)
         self.name_input.setPlaceholderText("Enter your name")
+        user_layout.addWidget(self.name_input)
         
         startPokerButton = QPushButton('Start Poker Game', self)
         startPokerButton.clicked.connect(self.on_start_poker_game)
@@ -1268,11 +1305,15 @@ class WelcomeScreen(QWidget):
         self.poker_callback = poker_callback
         self.blackjack_callback = blackjack_callback
         
-
+        games_widget= QWidget()
+        games_layout = QHBoxLayout()
+        games_layout.addWidget(startPokerButton)
+        games_layout.addWidget(startBlackjackButton)
+        games_widget.setLayout(games_layout)
+        
         layout.addWidget(titleLabel, alignment=Qt.AlignCenter)
-        layout.addWidget(self.name_input, alignment=Qt.AlignCenter)
-        layout.addWidget(startPokerButton, alignment=Qt.AlignCenter)
-        layout.addWidget(startBlackjackButton, alignment=Qt.AlignCenter)
+        layout.addWidget(user_widget, alignment=Qt.AlignCenter)
+        layout.addWidget(games_widget, alignment=Qt.AlignCenter)
         self.setLayout(layout)
         
     def on_start_poker_game(self):
