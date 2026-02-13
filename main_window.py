@@ -6,6 +6,7 @@ from PyQt5.QtWidgets import QShortcut
 from game import Poker_for_GUI as PokerGame
 from blackjack import BlackJack as BlackjackGame
 from game import Database_Helper as DBHelper
+BLACKJACK_DEBUG_EXPAND_WINDOW = False
 
 class MainWindow(QWidget):
     def __init__(self,):
@@ -70,17 +71,25 @@ class MainWindow(QWidget):
         self.blackjack_game_screen.start_game()
         # Remove fixed size and resize to fit game content
         self.setFixedSize(0, 0)
-        try:
-            self.setMinimumSize(self.blackjack_game_screen.sizeHint())
-        except Exception:
-            pass
-        # Fit window to content after screen switch
-        self.adjustSize()
-        # Start at the computed minimum size automatically
-        try:
-            self.resize(self.minimumSize())
-        except Exception:
-            pass
+        if not BLACKJACK_DEBUG_EXPAND_WINDOW:
+            # Lock a reasonable minimum size based on the initial
+            # layout so cards don't get squished.
+            try:
+                self.setMinimumSize(self.blackjack_game_screen.sizeHint())
+            except Exception:
+                pass
+            # Fit window to content after screen switch
+            self.adjustSize()
+            # Start at the computed minimum size automatically
+            try:
+                self.resize(self.minimumSize())
+            except Exception:
+                pass
+        else:
+            # In debug/override mode, just let Qt choose an
+            # appropriate size and allow the window to grow as
+            # more content is added.
+            self.adjustSize()
         
         
     def show_poker_game_screen(self, player_name="You", bot_count=2):
@@ -175,7 +184,10 @@ class BlackjackGameScreen(QWidget):
         
         
         # # --- Player cards ---
-        self.hands_layout = QHBoxLayout()
+        # Use a grid so that up to four hands can be arranged
+        # in two rows: hands 0-1 on the first row, 2-3 on the
+        # second row.
+        self.hands_layout = QGridLayout()
         self.hand_card_labels = []  # List of lists: one list of QLabel per hand
 
         # For debugging: set initial hands
@@ -207,6 +219,9 @@ class BlackjackGameScreen(QWidget):
         
         buttons_widget = QWidget()
         buttons_widget.setLayout(buttons_layout)
+        # Keep the button column from stretching vertically and
+        # reduce downward shifting when extra hand rows appear.
+        buttons_widget.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         
         # ---------------------
         # # Create placeholders for up to 5 opponents
@@ -280,11 +295,15 @@ class BlackjackGameScreen(QWidget):
         
         # --- Combine cards and buttons horizontally ---
         cards_and_buttons_layout = QHBoxLayout()
+        cards_and_buttons_layout.setContentsMargins(0, 0, 0, 0)
+        cards_and_buttons_layout.setSpacing(20)
         hands_widget = QWidget()
         hands_widget.setLayout(self.hands_layout)
         cards_and_buttons_layout.addWidget(hands_widget)
         cards_and_buttons_layout.addSpacing(20)
-        cards_and_buttons_layout.addWidget(buttons_widget)
+        # Keep the buttons column top-aligned so it does not
+        # move downward when additional hand rows appear.
+        cards_and_buttons_layout.addWidget(buttons_widget, alignment=Qt.AlignTop)
         cards_and_buttons_widget = QWidget()
         cards_and_buttons_widget.setLayout(cards_and_buttons_layout)
         
@@ -301,13 +320,40 @@ class BlackjackGameScreen(QWidget):
         self.hand_total_label.setFont(QFont('Arial', 14))
         #self.hand_total_label.setStyleSheet("color: #222;")
         content_layout.addWidget(self.hand_total_label, alignment=Qt.AlignCenter)
+        # Keep the cards+buttons row centered vertically while the
+        # buttons column itself stays top-aligned within that row.
         content_layout.addWidget(cards_and_buttons_widget, alignment=Qt.AlignCenter)
 
         # Prevent squishing: enforce minimum size equal to layout's size hint
         content_layout.setSizeConstraint(QLayout.SetMinimumSize)
         self.setLayout(content_layout)
+
+        if not BLACKJACK_DEBUG_EXPAND_WINDOW:
+            try:
+                self.setMinimumSize(self.sizeHint())
+            except Exception:
+                pass
+
+        # Local override: when True, leave all bot card slots
+        # visible so the initial window size clearly reflects the
+        # maximum layout requirements. When False (default), hide
+        # all but the first two slots so the UI looks normal.
+        show_all_bot_slots_for_debug = True
+        # Expose for use in update_opponent_hand so we can
+        # optionally keep all bot card slots visible.
+        self._debug_show_all_bot_slots = show_all_bot_slots_for_debug
         try:
-            self.setMinimumSize(self.sizeHint())
+            for opp in getattr(self, "opponent_widgets", []):
+                labels = getattr(opp, "card_labels", [])
+                if show_all_bot_slots_for_debug:
+                    for lbl in labels:
+                        lbl.show()
+                else:
+                    for i, lbl in enumerate(labels):
+                        if i < 2:
+                            lbl.show()
+                        else:
+                            lbl.hide()
         except Exception:
             pass
         
@@ -336,13 +382,56 @@ class BlackjackGameScreen(QWidget):
                 widget.deleteLater()
         self.hand_card_labels = []
 
+        total_hands = len(hands)
+        # Base player card size
+        base_w, base_h = 80, 120
+
         for idx, hand in enumerate(hands):
+            # Dynamically scale card size and spacing:
+            # - 1-2 cards: full size (possibly shrunk if many hands)
+            # - 3-5 cards: shrink to fit within a max width
+            # - 6+ cards: keep size as for 5 cards but overlap
+            #   cards to the right so the hand doesn't grow
+            #   indefinitely wide.
+            n = len(hand)
+            if n <= 0:
+                n = 1
+
+            if n <= 2:
+                card_w, card_h = base_w, base_h
+                spacing = 4
+            elif 3 <= n <= 5:
+                max_total_width = 400
+                scale = min(1.0, max_total_width / float(n * base_w))
+                card_w = max(35, int(base_w * scale))
+                card_h = max(55, int(base_h * scale))
+                spacing = 4
+            else:
+                # 6 or more cards: size them as if there were 5,
+                # then overlap to the right.
+                max_total_width = 400
+                n_for_size = 5
+                scale = min(1.0, max_total_width / float(n_for_size * base_w))
+                card_w = max(35, int(base_w * scale))
+                card_h = max(55, int(base_h * scale))
+                overlap_fraction = 0.75  # right card covers 3/4 of left
+                spacing = -int(card_w * overlap_fraction)
+
+            # If we have more than two hands (i.e., a second row),
+            # apply an additional scale-down so that all rows fit
+            # comfortably without forcing the buttons far downward.
+            if total_hands > 2:
+                row_scale = 0.85
+                card_w = max(30, int(card_w * row_scale))
+                card_h = max(50, int(card_h * row_scale))
+
             hand_layout = QHBoxLayout()
+            hand_layout.setSpacing(spacing)
             hand_labels = []
             for card in hand:
                 card_label = QLabel(self)
-                card_label.setFixedSize(80, 120)
-                pixmap = QPixmap(f"cards_graphic/{card}.png").scaled(80, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                card_label.setFixedSize(card_w, card_h)
+                pixmap = QPixmap(f"cards_graphic/{card}.png").scaled(card_w, card_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 card_label.setPixmap(pixmap)
                 # Optionally highlight the active hand
                 if idx == active_hand_index:
@@ -354,23 +443,84 @@ class BlackjackGameScreen(QWidget):
             self.hand_card_labels.append(hand_labels)
             hand_widget = QWidget()
             hand_widget.setLayout(hand_layout)
-            self.hands_layout.addWidget(hand_widget)
+            # Place hands 0-1 on the first row, 2-3 on the second
+            row = 0 if idx < 2 else 1
+            col = idx if idx < 2 else idx - 2
+            self.hands_layout.addWidget(hand_widget, row, col, alignment=Qt.AlignCenter)
+
+        # In override mode, let the main window resize itself
+        # to accommodate larger layouts when additional hands
+        # or many cards are present.
+        if getattr(self, "main_window", None) is not None:
+            try:
+                if BLACKJACK_DEBUG_EXPAND_WINDOW:
+                    self.main_window.adjustSize()
+            except Exception:
+                pass
 
     def create_opponent_widget(self, name, num_cards=2):
         widget = QWidget()
         vbox = QVBoxLayout()
         name_label = QLabel(name)
         name_label.setFont(QFont('Arial', 16))
-        hbox = QHBoxLayout()
+        # Two-layout hand: when there are more than 5 cards, the first layout holds the overlapped cards (using
+        # negative spacing) and the second layout holds the final card without negative spacing. There is no
+        # spacing or margin between these two layouts so they appear as one continuous hand.
+        max_total_width = 300
+        base_w, base_h = 60, 90
+
+        cards_container = QWidget()
+        outer_layout = QHBoxLayout(cards_container)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        # Use two inner layouts (rather than extra widgets) so Qt only has to manage layouts inside the fixed-width
+        # container. The left layout holds the overlapped group; the right layout holds just the final card.
+        left_layout = QHBoxLayout()
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(0)
+
+        last_layout = QHBoxLayout()
+        last_layout.setContentsMargins(0, 0, 0, 0)
+        last_layout.setSpacing(0)
+
+        outer_layout.addLayout(left_layout)
+        outer_layout.addLayout(last_layout)
+        outer_layout.setStretch(0, 1)
+        outer_layout.setStretch(1, 0)
+        cards_container.setFixedWidth(max_total_width)
+        cards_container.setMinimumHeight(base_h)
+
+        # Pre-create eleven card labels and lay them out once here
+        # so the initial debug view shows all slots.
         card_labels = []
-        for _ in range(num_cards):
-            card_label = QLabel()
-            card_label.setFixedSize(60, 90)
-            card_label.setPixmap(QPixmap("cards_graphic/card_back.png").scaled(60, 90, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-            hbox.addWidget(card_label)
+        for _ in range(11):
+            card_label = QLabel(cards_container)
+            card_label.setFixedSize(base_w, base_h)
+            card_label.setPixmap(QPixmap("cards_graphic/card_back.png").scaled(base_w, base_h, Qt.KeepAspectRatio, Qt.SmoothTransformation))
             card_labels.append(card_label)
+
+        # Arrange the initial 11 cards as an overlapped "max hand"
+        # so the window's size hint and debug view reflect the worst-case bot hand width.
+        visible_n = len(card_labels)
+        n_for_size = 5
+        scale = min(1.0, max_total_width / float(n_for_size * base_w))
+        card_w = max(30, int(base_w * scale))
+        card_h = max(45, int(base_h * scale))
+        overlap_fraction = 0.75
+        spacing = -int(card_w * overlap_fraction)
+        left_layout.setSpacing(spacing)
+
+        for idx, lbl in enumerate(card_labels):
+            lbl.setFixedSize(card_w, card_h)
+            lbl.setPixmap(QPixmap("cards_graphic/card_back.png").scaled(card_w, card_h, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            if idx < visible_n - 1:
+                left_layout.addWidget(lbl)
+            else:
+                last_layout.addWidget(lbl)
+
         vbox.addWidget(name_label, alignment=Qt.AlignCenter)
-        vbox.addLayout(hbox)
+        vbox.addWidget(cards_container, alignment=Qt.AlignCenter)
         bet_label = QLabel("Bet: 0")
         bet_label.setFont(QFont('Arial', 12))
         bet_label.setAlignment(Qt.AlignCenter)
@@ -378,25 +528,84 @@ class BlackjackGameScreen(QWidget):
         widget.setLayout(vbox)
         widget.bet_label = bet_label  # Attach for easy access
         widget.card_labels = card_labels  # Attach for dynamic updates
+        widget.cards_left_layout = left_layout
+        widget.cards_last_layout = last_layout
         return widget
+
     def update_opponent_hand(self, bot_index, hand):
+        """Display a bot's hand using 11 fixed slots.
+
+        Shrinking/overlap rules mirror the player hand. For more
+        than 5 cards, the first N-1 cards are placed in the left
+        layout with negative spacing (overlap) and the final card
+        is placed in the right layout without negative spacing so
+        it remains fully visible.
+        """
         bot_widget = self.opponent_widgets[bot_index]
-        # Adjust number of card labels if needed
-        while len(bot_widget.card_labels) < len(hand):
-            card_label = QLabel()
-            card_label.setFixedSize(60, 90)
-            card_label.setPixmap(QPixmap("cards_graphic/card_back.png").scaled(60, 90, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-            bot_widget.layout().itemAt(1).layout().addWidget(card_label)
-            bot_widget.card_labels.append(card_label)
-        while len(bot_widget.card_labels) > len(hand):
-            label = bot_widget.card_labels.pop()
-            bot_widget.layout().itemAt(1).layout().removeWidget(label)
-            label.deleteLater()
-        # Update card images
-        for i, card in enumerate(hand):
-            pixmap = QPixmap(f"cards_graphic/{card}.png").scaled(60, 90, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            bot_widget.card_labels[i].setPixmap(pixmap)
-            bot_widget.card_labels[i].show()
+        card_labels = bot_widget.card_labels
+        left_layout = getattr(bot_widget, "cards_left_layout", None)
+        last_layout = getattr(bot_widget, "cards_last_layout", None)
+        if left_layout is None or last_layout is None:
+            return
+
+        max_slots = len(card_labels)
+        visible_n = len(hand)
+        base_w, base_h = 60, 90
+        max_total_width = 300
+        n = visible_n if visible_n > 0 else 1
+
+        # Determine card size and whether we need overlap based
+        # on the number of visible cards.
+        if n <= 2:
+            card_w, card_h = base_w, base_h
+            use_overlap = False
+        elif 3 <= n <= 5:
+            scale = min(1.0, max_total_width / float(n * base_w))
+            card_w = max(30, int(base_w * scale))
+            card_h = max(45, int(base_h * scale))
+            use_overlap = False
+        else:
+            # 6 or more cards: size them as if there were 5,
+            # then overlap to the right.
+            n_for_size = 5
+            scale = min(1.0, max_total_width / float(n_for_size * base_w))
+            card_w = max(30, int(base_w * scale))
+            card_h = max(45, int(base_h * scale))
+            use_overlap = True
+
+        # Nothing to show
+        if visible_n <= 0:
+            for lbl in card_labels:
+                lbl.hide()
+            return
+
+        # For 1–5 cards, keep all cards contiguous (spacing=0) by
+        # using only non-negative spacing. For 6+, apply negative
+        # spacing only to the overlapped group in the left layout
+        # so the final card (in last_layout) stays fully visible.
+        if use_overlap and visible_n > 5:
+            overlap_fraction = 0.75
+            spacing = -int(card_w * overlap_fraction)
+            left_layout.setSpacing(spacing)
+        else:
+            left_layout.setSpacing(0)
+        last_layout.setSpacing(0)
+
+        for i in range(max_slots):
+            lbl = card_labels[i]
+            if i < visible_n:
+                card = hand[i]
+                lbl.setFixedSize(card_w, card_h)
+                pixmap = QPixmap(f"cards_graphic/{card}.png").scaled(card_w, card_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                lbl.setPixmap(pixmap)
+                lbl.show()
+                if use_overlap and visible_n > 5 and i == visible_n - 1:
+                    # Last card for 6+ goes in the right layout
+                    last_layout.addWidget(lbl)
+                else:
+                    left_layout.addWidget(lbl)
+            else:
+                lbl.hide()
             
     def create_dealer_widget(self):
         widget = QWidget()
@@ -526,7 +735,20 @@ class BlackjackGameScreen(QWidget):
     
     def on_action_button_clicked(self, action):
         self.blackjack_game.process_player_action(self.current_player, self.current_hand_index, action)
-    
+        
+    def _get_bot_index_by_name(self, player_name):
+        """Map a bot player's name (e.g. 'Bot1') to its opponent_widgets index."""
+        try:
+            if not hasattr(self, "blackjack_game") or not self.blackjack_game:
+                return None
+            bots = [p for p in self.blackjack_game.players if getattr(p, "isBot", False)]
+            for idx, p in enumerate(bots):
+                if p.name == player_name:
+                    return idx
+        except Exception:
+            pass
+        return None
+        
     def on_phase(self, phase, data: dict):
         print("DEBUG: Blackjack phase:", phase, data)
         if phase == "initial_deal":
@@ -606,7 +828,35 @@ class BlackjackGameScreen(QWidget):
                 pass
             self.disable_action_buttons()
             self.refresh_wallet_label()
-        
+        elif phase == "bot_hand_update":
+            # {"name": player.name, "hand": hand, "hand_index": hand_index}
+            player_name = (data or {}).get("name", "Bot")
+            hand = (data or {}).get("hand") or []
+            bot_index = self._get_bot_index_by_name(player_name)
+            if bot_index is not None and 0 <= bot_index < len(self.opponent_widgets):
+                # Reveal all current bot cards (including second and any hits)
+                self.update_opponent_hand(bot_index, hand)
+
+        elif phase == "bot_bust":
+            # Show all bot cards and mark the bet label as busted
+            player_name = (data or {}).get("name", "Bot")
+            hand = (data or {}).get("hand") or []
+            bot_index = self._get_bot_index_by_name(player_name)
+            if bot_index is not None and 0 <= bot_index < len(self.opponent_widgets):
+                self.update_opponent_hand(bot_index, hand)
+                try:
+                    self.opponent_widgets[bot_index].bet_label.setText("Busted")
+                except Exception:
+                    pass
+
+        elif phase == "bot_stand":
+            # Final bot hand: show all cards, keep existing bet label text
+            player_name = (data or {}).get("name", "Bot")
+            hand = (data or {}).get("hand") or []
+            bot_index = self._get_bot_index_by_name(player_name)
+            if bot_index is not None and 0 <= bot_index < len(self.opponent_widgets):
+                self.update_opponent_hand(bot_index, hand)
+            
         # returned data: {"name":..., "hands":..., "bets":..., "hand_index": ...}
         if phase in ("player_action", "hit", "stand", "double_down", "surrender", "split", "bust"):
             # Keep hand highlights in sync with engine
@@ -1270,6 +1520,19 @@ class PokerGameScreen(QWidget):
         wallet = self.db_helper.retrieve_player_wallet(player_name)
         if wallet is not None:
             return wallet
+        return None
+
+    def _get_bot_index_by_name(self, player_name):
+        """Map a bot player's name (e.g. 'Bot1') to its opponent_widgets index."""
+        try:
+            if not hasattr(self, "blackjack_game") or not self.blackjack_game:
+                return None
+            bots = [p for p in self.blackjack_game.players if getattr(p, "isBot", False)]
+            for idx, p in enumerate(bots):
+                if p.name == player_name:
+                    return idx
+        except Exception:
+            pass
         return None
         
     

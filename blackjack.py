@@ -99,13 +99,16 @@ class BlackJack():
         if self._after_initial_deal_and_immediate_handling(backward_phase="round_end", main_player_name=self.get_main_player().name):
             return
 
-        # Only prompt the main player (non-bot)
+        # After initial dealing, have all bots play out their hands first,
+        # then hand control to the main (non-bot) player.
+        self._play_all_bots_before_main_player()
+
         main_player = self.get_main_player()
         if not main_player.hands:
             main_player.hands = [main_player.hand]
             main_player.bets = [main_player.bet]
 
-        #Continue playing
+        # Continue playing: prompt the main player for decisions
         self.request_player_action(main_player, 0)
 
     def initial_betting_round(self):
@@ -151,6 +154,10 @@ class BlackJack():
         if self._after_initial_deal_and_immediate_handling(backward_phase=None, main_player_name=player.name):
             return
 
+        # After initial dealing, have all bots play out their hands first,
+        # then hand control to the main (non-bot) player.
+        self._play_all_bots_before_main_player()
+
         # Event-driven: prompt only the main (non-bot) player, starting with hand 0
         main_player = player
         # Ensure hands structure exists
@@ -178,6 +185,55 @@ class BlackJack():
             if not player.hands:
                 player.hands = [player.hand]
                 player.bets = [player.bet]
+
+    def _play_all_bots_before_main_player(self):
+        """Auto-play all bot hands (simple hit/stand logic) before main player acts.
+
+        This does not notify phase_callback for each bot action; bots play
+        silently and their final hands are revealed later to the GUI.
+        """
+        for node in self.player_nodes:
+            p = node.player
+            if getattr(p, 'isBot', False):
+                self._auto_play_bot_player(p)
+
+    def _auto_play_bot_player(self, player: BotPlayer):
+        # Ensure hands/bets structure is initialized
+        if not player.hands:
+            player.hands = [player.hand]
+            player.bets = [player.bet]
+
+        for hand_index in range(len(player.hands)):
+            self._auto_play_bot_hand(player, hand_index)
+
+    def _auto_play_bot_hand(self, player: BotPlayer, hand_index: int):
+        # Very simple strategy: hit under 17, otherwise stand.
+        while True:
+            hand = player.hands[hand_index] if player.hands else player.hand
+            total = self.evaluator.evaluate_hand(hand)
+
+            if total < 17:
+                # Hit
+                card = self.dealer.deal_card()
+                hand.append(card)
+                total = self.evaluator.evaluate_hand(hand)
+                print(f"Bot {player.name} hits on hand {hand_index+1} and receives: {show_substituted(card)}. Hand total is now {total}.")
+                if self.phase_callback:
+                    self.phase_callback("bot_hand_update", {"name": player.name, "hand": list(hand), "hand_index": hand_index})
+                continue
+
+            if total > 21:
+                # Bust
+                print(f"Bot {player.name} busts on hand {hand_index+1} with hand: {show_substituted(hand)} and total {total}.")
+                if self.phase_callback:
+                    self.phase_callback("bot_bust", {"name": player.name, "hand": list(hand), "hand_index": hand_index})
+                break
+
+            # Stand on 17–21
+            print(f"Bot {player.name} stands on hand {hand_index+1} with hand: {show_substituted(hand)} and total {total}.")
+            if self.phase_callback:
+                self.phase_callback("bot_stand", {"name": player.name, "hand": list(hand), "hand_index": hand_index})
+            break
 
     def check_immediate_win(self) -> tuple:
         # Check for dealer blackjack first
@@ -341,11 +397,23 @@ class BlackJack():
             options.append('split')
         return hand, options
 
+    def bot_play_hand(self, player: BotPlayer, hand_index: int):
+        # Placeholder for bot logic; currently just stands
+        print(f"{player.name} (Bot) is playing hand {hand_index+1}...")
+        hand, options = self.get_action_options(player, hand_index)
+        # Simple bot logic: hit if under 17, otherwise stand
+        hand_value = self.evaluator.evaluate_hand(hand)
+        if hand_value < 17 and 'hit' in options:
+            action = 'hit'
+        else:
+            action = 'stand'
+        print(f"{player.name} (Bot) chooses to {action}.")
+        self.process_player_action(player, hand_index, action)
+        
+
     def request_player_action(self, player: Player, hand_index=0):
         print (f"Requesting action from {player.name} for hand {hand_index+1}...")
         if player.isBot:
-        # Let the bot logic handle the action automatically
-            #self.bot_play_hand(player, hand_index)
             return
         # Send phase update so GUI can highlight the active hand
         if self.phase_callback:
@@ -361,7 +429,7 @@ class BlackJack():
                 self.action_callback(player, options)
         else:
             self.cli_player_action(player, hand_index)
-            
+
         
     def process_player_action(self, player: Player, hand_index: int, action: str):
         if not player.hands:
@@ -428,6 +496,8 @@ class BlackJack():
                 else:
                     self.cli_player_action(player, hand_index)
                 return
+            
+            
             
             # Done with all hands for this player: proceed to dealer and settle
             self.dealer.play_out(self.evaluator)
@@ -511,8 +581,6 @@ class BlackJack():
     # --- CLI Fallback ---
     def cli_player_action(self, player: Player, hand_index: int):
         if player.isBot:
-        # Let the bot logic handle the action automatically
-            #self.bot_play_hand(player, hand_index)
             return
         
         hand, options = self.get_action_options(player, hand_index)
