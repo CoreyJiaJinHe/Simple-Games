@@ -174,7 +174,11 @@ def __main__():
     db.debug_show_tables_and_columns()
     playerList=db.get_players()
     print(playerList)
-    db.debug_get_dev_info()
+    leaderboard=db.get_leaderboard()
+    print("\nLeaderboard:")
+    for rank, (username, winnings) in enumerate(leaderboard, start=1):
+        print(f"{rank}. {username} - Total Winnings: {winnings}")
+    #db.debug_get_dev_info()
     #db.debug_get_table_data()
 if __name__ == "__main__":
     __main__()

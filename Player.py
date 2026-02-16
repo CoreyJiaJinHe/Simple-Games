@@ -1,6 +1,7 @@
 
 import random
 
+from Dealer import Dealer
 from HandEvaluators import PokerHandEvaluator
 from HandEvaluatorFactory import HandEvaluatorFactory
 class Player():
@@ -19,9 +20,21 @@ class Player():
         self.action_callback = action_callback
             
         
-    def request_card(self, dealer):
+    def request_card(self, dealer : Dealer):
         card = dealer.deal_card()
         self.hand.append(card)
+    
+    def discard_card(self, dealer : Dealer, card_index):
+        if not self.hand:
+            print(f"{self.name} has no cards to discard.")
+            return
+        
+        if 0 <= card_index < len(self.hand):
+            discarded_card = self.hand.pop(card_index)
+            dealer.store_used_card(discarded_card)
+            print(f"{self.name} has discarded {discarded_card}.")
+        else:
+            print(f"Invalid card index. Please choose a number between 0 and {len(self.hand)-1}.")
     
     def return_bet(self):
         self.wallet += self.bet
@@ -100,6 +113,7 @@ class BotPlayer(Player):
         self.game_type=game_type
         self.risk_tolerance = random.choice(["low", "medium", "high"])
         self.evaluator=None
+        #self.maximum_bet = 0
         if self.isBot:
             self.evaluator = HandEvaluatorFactory.get_evaluator(self.game_type)
         

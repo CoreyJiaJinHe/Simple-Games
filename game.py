@@ -55,7 +55,6 @@ class Poker_for_GUI():
         self.bot_bet_update_callback = bot_bet_update_callback
         self.bot_fold_callback = bot_fold_callback
         
-        self._betting_iter = None
         self._betting_need_to_act = None
         self._betting_current_bet = None
         self._betting_done_callback = None
@@ -156,7 +155,6 @@ class Poker_for_GUI():
                 done_callback()
             return
         self._betting_need_to_act = [n for n in self.player_nodes if not n.player.isFolded and n.player.wallet > 0]
-        self._betting_iter = iter(active_players)
         self._betting_done_callback = done_callback
         self.betting_next()
         
@@ -190,18 +188,18 @@ class Poker_for_GUI():
         to_call = max(0, self._betting_current_bet - player.current_bet)
         print(f"{player.name}'s turn. Current bet to call: {to_call}. Wallet: {player.wallet}")
 
-        wallet_before = player.wallet
+        #wallet_before = player.wallet
         if player.isBot:
             self.bot_set_bet(player, to_call, round_number=self._current_round_number)
-            wallet_after = player.wallet
-            delta = wallet_after - wallet_before
+            #wallet_after = player.wallet
+            #delta = wallet_after - wallet_before
             self.pot = sum(node.player.bet for node in self.player_nodes)
             if self.pot_update_callback:
                 self.pot_update_callback(self.pot)
             bot_index = self.players.index(player) - 1  # Adjust for human player at index 0
             if self.bot_bet_update_callback:
                 self.bot_bet_update_callback(bot_index, player.current_bet)
-            self.db_helper.update_player_wallet(player.name, delta)
+            #self.db_helper.update_player_wallet(player.name, delta)
             if player.isFolded:
                 if self.bot_fold_callback:
                     self.bot_fold_callback(bot_index,hand=player.hand)
@@ -323,6 +321,7 @@ class Poker_for_GUI():
         #---------------------------------
         else:
             maximum_bet = bot_player.maximum_bet
+            print(f"{bot_player.name} (Bot) has a maximum willingness to bet of {maximum_bet} based on its hand strength and risk tolerance.")
             #If the requirement to call, is greater than the maximum_bet minus
             #the existing current_bet (already placed bet)
             if (minimum_bet > maximum_bet-bot_player.current_bet):
