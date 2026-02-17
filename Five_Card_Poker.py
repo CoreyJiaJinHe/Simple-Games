@@ -70,7 +70,7 @@ class FiveCardPoker():
         self._betting_need_to_act = None
         self._betting_current_bet = None
         self._betting_done_callback = None
-        
+
     def get_main_player_node(self):
         # Helper to retrieve the non-bot (human) player's node
         return next(node for node in self.player_nodes if not node.player.isBot)
@@ -158,7 +158,6 @@ class FiveCardPoker():
         self._betting_current_bet = minimum_bet
         
         self._betting_need_to_act = [node for node in self.player_nodes if not node.player.isFolded and node.player.wallet > 0]
-        
         self._betting_done_callback = None
         
         def done_callback():
@@ -170,70 +169,73 @@ class FiveCardPoker():
                 self.discard_phase()
             elif self.current_round_number == 2:
                 self.showdown()
-
         self._betting_done_callback = done_callback
-        self.betting_next()
-    
-    def betting_next(self):
-        # If no one left to act, finish the betting round
-        if not self._betting_need_to_act:
-            self.pot = sum(node.player.bet for node in self.player_nodes)
-            #print(f"Total pot is now: {self.pot}\n")
-            if self._betting_done_callback:
-                self._betting_done_callback()
-            return
+        self.betting_run()
 
-        node = self._betting_need_to_act.pop(0)
-        player = node.player
-        if player.isFolded or player.wallet <= 0:
-            self.betting_next()
-            return
-        if self._betting_current_bet > 0 and player.current_bet == self._betting_current_bet:
-            self.betting_next()
-            return
+    def betting_run(self):
+        # Iterative version of betting flow to avoid recursive stack frames
+        while True:
+            # Finish betting round if no one left to act
+            if not self._betting_need_to_act:
+                self.pot = sum(node.player.bet for node in self.player_nodes)
+                if self._betting_done_callback:
+                    cb = self._betting_done_callback
+                    self._betting_done_callback = None
+                    cb()
+                break
 
-        to_call = max(0, self._betting_current_bet - player.current_bet)
-        print(f"{player.name}'s turn. Current bet to call: {to_call}. Wallet: {player.wallet}")
+            node = self._betting_need_to_act.pop(0)
+            player = node.player
 
-        #wallet_before = player.wallet
-        if player.isBot:
-            self.bot_set_bet(player, to_call, round_number=self.current_round_number)
-            bot_index = self.players.index(player) - 1  # Adjust for human player at index 0
-            # Check to see if the bot folds before updating wallet/pot/callbacks
-            if player.isFolded:
-                if self.bot_fold_callback:
-                    self.bot_fold_callback(bot_index, hand=player.hand)
-                # Skip wallet/pot/bet updates for folded bot
-                self.betting_next()
-                return
-            #wallet_after = player.wallet
-            #delta = wallet_after - wallet_before
-            self.pot = sum(node.player.bet for node in self.player_nodes)
-            if self.pot_update_callback:
-                self.pot_update_callback(self.pot)
-            if self.bot_bet_update_callback:
-                self.bot_bet_update_callback(bot_index, player.current_bet)
-            #self.db_helper.update_player_wallet(player.name, delta)
-            if player.current_bet > self._betting_current_bet:
-                # Update the current bet and requeue all others except this player
-                self._betting_current_bet = player.current_bet
-                self._betting_need_to_act = self.get_ordered_active_nodes_after(node)
-            self.betting_next()
-        else:
-            # For human, call the callback and wait for GUI to resume
-            if self.action_callback:
-                self._last_human_node = node  # Save for resume
-                self._last_human_bet = player.current_bet  # Save for resume
-                self.action_callback("to_call", to_call)
-            else:
-                player.set_bet(to_call)
+            # Skip folded or broke players
+            if player.isFolded or player.wallet <= 0:
+                continue
+
+            # If already matched the current bet, skip
+            if self._betting_current_bet > 0 and player.current_bet == self._betting_current_bet:
+                continue
+
+            to_call = max(0, self._betting_current_bet - player.current_bet)
+            print(f"{player.name}'s turn. Current bet to call: {to_call}. Wallet: {player.wallet}")
+
+            if player.isBot:
+                self.bot_set_bet(player, to_call, round_number=self.current_round_number)
+                bot_index = self.players.index(player) - 1  # human is index 0
+
+                if player.isFolded:
+                    if self.bot_fold_callback:
+                        self.bot_fold_callback(bot_index, hand=player.hand)
+                    continue
+
+                # Update pot and GUI callbacks
+                self.pot = sum(node.player.bet for node in self.player_nodes)
+                if self.pot_update_callback:
+                    self.pot_update_callback(self.pot)
+                if self.bot_bet_update_callback:
+                    self.bot_bet_update_callback(bot_index, player.current_bet)
+
+                # Handle raises: requeue all others after this player
                 if player.current_bet > self._betting_current_bet:
-                    # Update the current bet and requeue all others except this player
                     self._betting_current_bet = player.current_bet
                     self._betting_need_to_act = self.get_ordered_active_nodes_after(node)
-                self.betting_next()
-            # Wait for GUI to call resume_betting_round()
-    
+                    # Loop continues so everyone acts again
+                    continue
+            else:
+                # Human: use callback or immediate set_bet
+                if self.action_callback:
+                    self._last_human_node = node
+                    self._last_human_bet = player.current_bet
+                    self.action_callback("to_call", to_call)
+                    # Wait for external resume; exit loop
+                    break
+                else:
+                    player.set_bet(to_call)
+                    if player.current_bet > self._betting_current_bet:
+                        self._betting_current_bet = player.current_bet
+                        self._betting_need_to_act = self.get_ordered_active_nodes_after(node)
+                        continue
+            # If no raise and player acted, continue to next in queue
+
     def showdown(self):
         print(f"The final pot total is: {self.pot}\n")
         self.show_hands()
@@ -243,10 +245,18 @@ class FiveCardPoker():
         player.win_bet(bet)
     
     def determine_winner(self):
-        winner= None
-        highest_rank=0
-        winning_hand=[]
+        # Track current best rank and all players tied with that exact winning combo
+        highest_rank = 0
+        winning_hand = []
+        winners = []  # list[Player]
+
         players = [p for p in self.players if not p.isFolded]
+        # Guard: if any active player has an empty hand, determining a winner will fail
+        if any(len(p.hand) == 0 for p in players):
+            print("Warning: One or more active players have empty hands. Deal or set hands before showdown.")
+            if self.phase_callback:
+                self.phase_callback("winner", [[], [], self.pot])
+            return
         for player in players:
             hand = player.hand
             print (hand)
@@ -254,17 +264,177 @@ class FiveCardPoker():
             print(f"{player.name} has {hand_name}: {show_substituted(result)}")
             if rank > highest_rank:
                 highest_rank = rank
-                winner = player
                 winning_hand = result
+                winners = [player]
+            if rank == highest_rank and winners:
+                # Precompute highest card ranks for both current winner and player
+                highest_rank_winner = self.evaluator.get_highest_rank(winning_hand)
+                highest_rank_player = self.evaluator.get_highest_rank(result)
+                #Check suits and check highest card in the hand to break ties. 
+                # This is a simplified tie-breaking logic and may not cover all cases.
+                if (rank in [2, 3]): #Pair, Two Pair
+                    # Determine pair ranks for winner and player (two ranks for Two Pair)
+                    from utils import rank as rank_list
+                    def get_pair_ranks(cards):
+                        ranks = [self.evaluator.remove_suit_card(c) for c in cards]
+                        unique = sorted(set(ranks), key=lambda r: rank_list.index(r), reverse=True)
+                        return unique
+                    winner_pair_ranks = get_pair_ranks(winning_hand)
+                    player_pair_ranks = get_pair_ranks(result)
+
+                    # Compare highest pair first
+                    def rank_val(r):
+                        return rank_list.index(r)
+                    if rank_val(player_pair_ranks[0]) > rank_val(winner_pair_ranks[0]):
+                        winning_hand = result
+                        winners = [player]
+                    elif rank_val(player_pair_ranks[0]) == rank_val(winner_pair_ranks[0]):
+                        if len(player_pair_ranks) == 2 and len(winner_pair_ranks) == 2:
+                            # Two Pair: compare second pair
+                            if rank_val(player_pair_ranks[1]) > rank_val(winner_pair_ranks[1]):
+                                winning_hand = result
+                                winners = [player]
+                            elif rank_val(player_pair_ranks[1]) == rank_val(winner_pair_ranks[1]):
+                                # Compare kickers (hand minus the pair cards)
+                                leader_kickers = [c for c in winners[0].hand if c not in winning_hand]
+                                player_kickers = [c for c in hand if c not in result]
+                                winner_high_card = self.evaluator.get_highest_rank(leader_kickers)
+                                player_high_card = self.evaluator.get_highest_rank(player_kickers)
+                                if player_high_card > winner_high_card:
+                                    winning_hand = result
+                                    winners = [player]
+                                elif player_high_card == winner_high_card:
+                                    # Two Pair: if kickers equal, it's a tie (no suit precedence)
+                                    if player not in winners:
+                                        winners.append(player)
+                        else:
+                            # Single Pair: compare kickers after equal pair rank
+                            leader_kickers = [c for c in winners[0].hand if c not in winning_hand]
+                            player_kickers = [c for c in hand if c not in result]
+                            winner_high_card = self.evaluator.get_highest_rank(leader_kickers)
+                            player_high_card = self.evaluator.get_highest_rank(player_kickers)
+                            if player_high_card > winner_high_card:
+                                winning_hand = result
+                                winners = [player]
+                            elif player_high_card == winner_high_card:
+                                # Only pairs use suit precedence
+                                winner_high_suit = self.evaluator.get_highest_suit(winning_hand)
+                                player_high_suit = self.evaluator.get_highest_suit(result)
+                                suit_rank = {"H": 4, "D": 3, "C": 2, "S": 1}
+                                if suit_rank[player_high_suit] > suit_rank[winner_high_suit]:
+                                    winning_hand = result
+                                    winners = [player]
+                elif (rank == 4):
+                    # Three of a kind: compare card ranks.
+                    #STOP GENERATING FOR KICKERS. YOU CANT HAVE TWO PLAYERS WITH THE SAME THREE OF A KIND.
+                    #THERE AREN'T ENOUGH CARDS IN THE DECK FOR THAT TO HAPPEN.
+                    if highest_rank_player > highest_rank_winner:
+                        winning_hand = result
+                        winners = [player]
+                    
+                elif rank == 7: #Full House
+                    #We only need to compare the ranks of the three of a kind part of the full house.
+                    #The pair is unnecessary because its impossible to share three of a kinds.
+                    #There are only four of each rank, thus its impossible for two players to have three of a kinds of the same rank in the same hand.
+                    three_card_winner = self.evaluator.remove_suit_card(winning_hand[0])
+                    three_card_player = self.evaluator.remove_suit_card(result[0])
+                    if three_card_player > three_card_winner:
+                        winning_hand = result
+                        winners = [player]
+                    elif three_card_player == three_card_winner:
+                        # Treat as tie; suits are not compared for full house
+                        if player not in winners:
+                            winners.append(player)
+                elif rank in [5, 6, 8, 9]: #Straight, Flush, Four of a Kind, Straight Flush
+                    #For these hand ranks, we can compare the highest card in the hand first, then suits if needed.
+                    if highest_rank_player > highest_rank_winner:
+                        winning_hand = result
+                        winners = [player]
+                    else:
+                        #If highest ranks are the same, we can compare the next highest card, 
+                        #and so on until we find a difference or run out of cards to compare. 
+                        #If we run out of cards to compare, then its a tie.
+                        sorted_winner_hand = self.evaluator.sort_hand(winning_hand)
+                        sorted_player_hand = self.evaluator.sort_hand(result)
+                        decided = False
+                        for w_card, p_card in zip(reversed(sorted_winner_hand), reversed(sorted_player_hand)):
+                            if self.evaluator.remove_suit_card(p_card) > self.evaluator.remove_suit_card(w_card):
+                                winning_hand = result
+                                winners = [player]
+                                decided = True
+                                break
+                        # If ranks compare equal across all cards, it's a tie (no suit comparison here)
+                        if not decided and highest_rank_player == highest_rank_winner:
+                            if player not in winners:
+                                winners.append(player)
+                elif rank == 10: #Royal Flush
+                    # Royal flushes tie automatically
+                    if player not in winners:
+                        winners.append(player)
+                else: #High Card
+                    if highest_rank_player > highest_rank_winner:
+                        winning_hand = result
+                        winners = [player]
+                    elif highest_rank_player == highest_rank_winner:
+                         # If high card ranks are equal, compare suits of the high card
+                        winner_high_suit = self.evaluator.get_highest_suit(winning_hand)
+                        player_high_suit = self.evaluator.get_highest_suit(result)
+                        suit_rank = {"H": 4, "D": 3, "C": 2, "S": 1}
+                        if suit_rank[player_high_suit] > suit_rank[winner_high_suit]:
+                            winning_hand = result
+                            winners = [player]
+        # Announce winners and split pot if tied
+        if not winners:
+            print("No winner could be determined. Ensure hands are set correctly.")
+            if self.phase_callback:
+                self.phase_callback("winner", [[], [], self.pot])
+            return
+        
+        winner_names = [p.name for p in winners]
         if self.phase_callback:
-            self.phase_callback("winner", [winner.name,winning_hand,self.pot])
-        print(f"The winner is {winner.name} with hand: {show_substituted(winning_hand)}")
-        self.award_player(winner, self.pot)
-        self.db_helper.log_game("Poker", ', '.join([p.name for p in players]), winner.name, self.pot)
-        self.db_helper.update_player_stats(winner.name, self.pot, True, self.pot)
+            self.phase_callback("winner", [winner_names, winning_hand, self.pot])
+        if len(winner_names) > 1:
+            print(f"Tie: {', '.join(winner_names)} with hand: {show_substituted(winning_hand)}")
+            share = self.pot // len(winners)
+            remainder = self.pot % len(winners)
+            for idx, w in enumerate(winners):
+                award = share + (remainder if idx == 0 else 0)
+                self.award_player(w, award)
+                self.db_helper.update_player_stats(w.name, award, True, award)
+            self.db_helper.log_game("Poker", ', '.join([p.name for p in players]), ', '.join(winner_names), self.pot)
+        else:
+            leader = winners[0]
+            print(f"The winner is {leader.name} with hand: {show_substituted(winning_hand)}")
+            self.award_player(leader, self.pot)
+            self.db_helper.log_game("Poker", ', '.join([p.name for p in players]), leader.name, self.pot)
+            self.db_helper.update_player_stats(leader.name, self.pot, True, self.pot)
+    
+    
+    
+    def set_debug_hands(self, hands_by_name: dict):
+        for p in self.players:
+            if p.name in hands_by_name:
+                p.hand = list(hands_by_name[p.name])
+                p.isFolded = False
+                if not hasattr(p, 'current_bet'):
+                    p.current_bet = 0
+        # Reset pot to avoid stale values from previous rounds
+        self.pot = sum(getattr(p, 'current_bet', 0) for p in self.players)
+        
+    def debug_deal_hands(self):
+        # Debug function to deal specific hands for testing
+        main_player = self.get_main_player()
+        main_player.hand = ["9C", "10C", "JC", "QC", "KC"]  # Royal Flush
+        self.player_nodes[1].player.hand = ["9D", "10D", "JD", "QD", "KD"]  # Straight Flush
+        self.player_nodes[2].player.hand = ["2C", "2D", "2H", "5S", "7D"]  # Three of a Kind
+    
+    def debug_start_game(self):
+        self.debug_deal_hands()
+        self.betting_round(minimum_bet=10, round_name="initial_betting_round")
     
     def start_game(self):
-        
+        # self.debug_start_game()
+        # return
         
         #Five Card Poker.
         #Get initial buy in bets.
@@ -297,6 +467,11 @@ class FiveCardPoker():
 
 if "__main__" == __name__:
     game = FiveCardPoker(player_names=["You", "Bot1", "Bot2"])
+#     game.set_debug_hands({
+#     "You": ["AH","KH","QH","JH","10H"],
+#     "Bot1": ["9C","9D","9S","2H","3D"],
+#     "Bot2": ["AS","AD","AC","KS","QD"],
+# })
     game.start_game()
 
 

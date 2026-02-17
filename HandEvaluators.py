@@ -1,5 +1,5 @@
 
-from utils import remove_suit, custom_sort, rank
+from utils import remove_suit_hand, custom_sort, rank
 
 class PokerHandEvaluator():
     def evaluate_hand(self, hand, dealt):
@@ -36,55 +36,63 @@ class PokerHandEvaluator():
                 return True, rf
         return False, []
         
-    def check_straight_flush(self,hand, dealt):
-        def check_straight(self,hand,dealt):
-            temp_hand=hand.copy() + dealt.copy()
-            temp_hand=remove_suit(temp_hand)
-            temp_hand.sort()
-            pointA, pointB=0, 5
-            while pointA<len(rank)-5:
-                pointHandA, pointHandB=0,5
-                while pointHandA<len(temp_hand)-5:
-                    if temp_hand[pointHandA:pointHandB]==rank[pointA:pointB]:
-                        print(temp_hand[pointHandA:pointHandB], rank[pointA:pointB])
-                        return True, temp_hand[pointHandA:pointHandB]
-                    pointHandA, pointHandB = pointHandA + 1, pointHandB + 1
-                pointA, pointB = pointA + 1, pointB + 1
-            return False, []
-        
-        firstCheck, straightCards=check_straight(self,hand, dealt)
-        
-        if (firstCheck):
-            suits=["H", "D", "C", "S"]
-            for suit in suits:
-                suitedCards=[]
-                for card in straightCards:
-                    suitedCards.append(card+suit)
-                temp_hand=hand.copy()
-                temp_hand=temp_hand+dealt
-                if all(card in temp_hand for card in suitedCards):
-                    return True, suitedCards
+    def check_straight_flush(self, hand, dealt):
+        # Check straight within each suit separately
+        combined = hand.copy() + dealt.copy()
+        suits = ["H", "D", "C", "S"]
+        for s in suits:
+            suited = [c for c in combined if c[-1] == s]
+            suited_ranks = [c[:-1] for c in suited]
+            found, straight_ranks = self._find_straight_ranks(suited_ranks)
+            if found:
+                return True, [r + s for r in straight_ranks]
         return False, []
     
-    def check_straight(self,hand,dealt):
-        temp_hand=hand.copy() + dealt.copy()
-        for i in range (len(temp_hand)):
-            temp_hand[i]=temp_hand[i][:-1]
-        temp_hand.sort()
-        pointA, pointB=0, 5
-        while pointA<len(rank)-5:
-            pointHandA, pointHandB=0, 5
-            while pointHandA<len(temp_hand)-5:
-                if temp_hand[pointHandA:pointHandB]==rank[pointA:pointB]:
-                    print(temp_hand[pointHandA:pointHandB], rank[pointA:pointB])
-                    return True, temp_hand[pointHandA:pointHandB]
-                pointHandA, pointHandB = pointHandA + 1, pointHandB + 1
-            pointA, pointB = pointA + 1, pointB + 1
+    def check_straight(self, hand, dealt):
+        combined = hand.copy() + dealt.copy()
+        ranks_only = [c[:-1] for c in combined]
+        found, straight_ranks = self._find_straight_ranks(ranks_only)
+        if found:
+            return True, straight_ranks
+        return False, []
+
+    def _find_straight_ranks(self, ranks):
+        """Return (True, [r1..r5]) for highest straight found in ranks.
+        Handles Ace-high (A=14) and Ace-low wheel (A=1 with 2-3-4-5)."""
+        if not ranks:
+            return False, []
+        # Map ranks to numeric values (Ace high=14)
+        value_map = {"2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7, "8": 8,
+                     "9": 9, "10": 10, "J": 11, "Q": 12, "K": 13, "A": 14}
+        # Helper to check consecutive windows
+        def find_consecutive(vals):
+            vals = sorted(set(vals))
+            best = None
+            for i in range(len(vals) - 4):
+                window = vals[i:i+5]
+                if all(window[j] == window[0] + j for j in range(5)):
+                    if best is None or window[-1] > best[-1]:
+                        best = window
+            return best
+        # Try Ace-high first
+        values_high = [value_map.get(r, 0) for r in ranks]
+        best_high = find_consecutive(values_high)
+        if best_high:
+            # Convert back to rank strings
+            inv_map = {v: k for k, v in value_map.items()}
+            return True, [inv_map[v] for v in best_high]
+        # Try Ace-low (wheel): treat Ace as 1
+        values_low = [1 if r == "A" else value_map.get(r, 0) for r in ranks]
+        best_low = find_consecutive(values_low)
+        if best_low and best_low[-1] == 5:
+            inv_map_low = {1: "A", 2: "2", 3: "3", 4: "4", 5: "5", 6: "6", 7: "7",
+                           8: "8", 9: "9", 10: "10", 11: "J", 12: "Q", 13: "K", 14: "A"}
+            return True, [inv_map_low[v] for v in best_low]
         return False, []
     
     def check_four_of_a_kind(self,hand,dealt):
         temp_hand=hand.copy() + dealt.copy()
-        temp_hand_ranks=remove_suit(temp_hand)
+        temp_hand_ranks=remove_suit_hand(temp_hand)
         for card_rank in rank:
             if temp_hand_ranks.count(card_rank)==4:
                 # Collect the actual cards with suits
@@ -94,7 +102,7 @@ class PokerHandEvaluator():
     
     def check_three_of_a_kind(self,hand,dealt):
         temp_hand=hand.copy() + dealt.copy()
-        temp_hand_ranks=remove_suit(temp_hand)
+        temp_hand_ranks=remove_suit_hand(temp_hand)
         for card_rank in rank:
             if temp_hand_ranks.count(card_rank)==3:
                 three_cards = [c for c in temp_hand if c[:-1] == card_rank]
@@ -104,7 +112,7 @@ class PokerHandEvaluator():
     def check_single_pair(self,hand,dealt):
         
         temp_hand=hand.copy() + dealt.copy()
-        temp_hand_ranks=remove_suit(temp_hand)
+        temp_hand_ranks=remove_suit_hand(temp_hand)
         for card_rank in rank:
             if temp_hand_ranks.count(card_rank) == 2:
                 pair_cards = [c for c in temp_hand if c[:-1] == card_rank]
@@ -113,7 +121,7 @@ class PokerHandEvaluator():
     
     def check_two_pair(self,hand,dealt):
         temp_hand = hand.copy() + dealt.copy()
-        temp_hand_ranks = remove_suit(temp_hand)
+        temp_hand_ranks = remove_suit_hand(temp_hand)
         pairs = []
         # Find the two ranks that have exactly two cards
         for card in rank:
@@ -151,6 +159,30 @@ class PokerHandEvaluator():
         temp_hand=hand.copy() + dealt.copy()
         temp_hand=custom_sort(temp_hand)
         return temp_hand[-1]
+    
+    def remove_suit_card(self, card):
+        return card[:-1]
+    
+    def get_highest_rank(self, hand):
+        temp_hand = hand.copy()
+        temp_hand = custom_sort(temp_hand)
+        return temp_hand[-1][:-1]
+    def get_highest_suit(self, hand):
+        temp_hand = hand.copy()
+        temp_hand = custom_sort(temp_hand)
+        return temp_hand[-1][-1]
+
+    def get_total(self, hand):
+        total = 0
+        for card in hand:
+            card = card[:-1]
+            total = total + rank.index(card)+1
+        return total
+    
+    def sort_hand(self, hand):
+        temp_hand = hand.copy()
+        temp_hand = custom_sort(temp_hand)
+        return temp_hand
 
 class BlackjackHandEvaluator():
     def evaluate_hand(self, hand):

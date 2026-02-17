@@ -1,6 +1,6 @@
 
 substitute=["1","11","12","13"]
-rank = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
+rank = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"]
 suit=["H", "D", "C", "S"]
 cards=[]
 def util_init():
@@ -23,7 +23,7 @@ def custom_sort(hand):
             sorted_hand.append(card)
     return sorted_hand
 
-def remove_suit(hand):
+def remove_suit_hand(hand):
     temp_hand=[]
     for card in hand:
         temp_hand.append(card[:-1])
