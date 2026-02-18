@@ -4,6 +4,7 @@ from PyQt5.QtGui import QFont, QPixmap, QKeySequence, QGuiApplication, QFontMetr
 from PyQt5.QtWidgets import QShortcut
 
 from game import Poker_for_GUI as PokerGame
+from Five_Card_Poker import FiveCardPoker
 from blackjack import BlackJack as BlackjackGame
 from game import Database_Helper as DBHelper
 BLACKJACK_DEBUG_EXPAND_WINDOW = False
@@ -35,13 +36,16 @@ class MainWindow(QWidget):
         self.stacked_widget = QStackedWidget(self)
         self.welcome_screen = WelcomeScreen(
             poker_callback=self.show_poker_game_screen,
-            blackjack_callback=self.show_blackjack_game_screen
+            blackjack_callback=self.show_blackjack_game_screen,
+            five_card_poker_callback=self.show_five_card_poker_game_screen
         )
         self.poker_game_screen = PokerGameScreen(parent=self)
+        self.five_card_poker_game_screen = FiveCardPokerGameScreen(parent=self)
         self.blackjack_game_screen = BlackjackGameScreen(parent=self)
 
         self.stacked_widget.addWidget(self.welcome_screen)
         self.stacked_widget.addWidget(self.poker_game_screen)
+        self.stacked_widget.addWidget(self.five_card_poker_game_screen)
         self.stacked_widget.addWidget(self.blackjack_game_screen)
         layout = QVBoxLayout()
         layout.addWidget(self.stacked_widget)
@@ -117,14 +121,339 @@ class MainWindow(QWidget):
         self.poker_game_screen.start_game()
         # Let Qt compute an appropriate initial size based on content
         self.adjustSize()
-        
-        
+
+    def show_five_card_poker_game_screen(self, player_name="You", bot_count=3):
+        print(f"Starting Five Card Poker game for {player_name} vs {bot_count} bots")
+        self.five_card_poker_game_screen.set_player_name(player_name)
+        self.five_card_poker_game_screen.set_bot_count(bot_count)
+        self.stacked_widget.setCurrentWidget(self.five_card_poker_game_screen)
+        # Show borders
+        self.outer_frame.show()
+        self.middle_frame.show()
+        # Remove fixed size and resize to fit content
+        self.setFixedSize(0, 0)
+        try:
+            self.setMinimumSize(self.five_card_poker_game_screen.sizeHint())
+        except Exception:
+            pass
+        self.adjustSize()
+        try:
+            self.resize(self.minimumSize())
+        except Exception:
+            pass
+        self.five_card_poker_game_screen.start_game()
+        self.adjustSize()
     def resizeEvent(self, event):
         # Ensure the background frames fill the window
         self.outer_frame.setGeometry(self.rect())
         self.middle_frame.setGeometry(self.rect().adjusted(8, 8, -8, -8))
         super().resizeEvent(event)
 
+
+
+
+
+class FiveCardPokerGameScreen(QWidget):
+    class ClickableLabel(QLabel):
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self.selected = False
+        def mousePressEvent(self, event):
+            self.selected = not self.selected
+            self.update_selection_style()
+            if hasattr(self.parent(), '_on_card_clicked'):
+                try:
+                    self.parent()._on_card_clicked(self)
+                except Exception:
+                    pass
+        def update_selection_style(self):
+            if self.selected:
+                self.setStyleSheet("border: 2px solid gold;")
+            else:
+                self.setStyleSheet("")
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.main_window = parent
+        self.bot_count = 3
+        self.player_name = "You"
+        self.engine = None
+        self._selected_indices = set()
+        self._pending_to_call = 0
+
+        layout = QVBoxLayout()
+
+        # Top bar
+        self.wallet_label = QLabel("Wallet: $1000")
+        self.wallet_label.setFont(QFont('Arial', 14))
+        self.wallet_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        top_bar_layout = QHBoxLayout()
+        top_bar_layout.addStretch()
+        top_bar_layout.addWidget(self.wallet_label)
+        layout.addLayout(top_bar_layout)
+
+        # Table area grid: Up (top center), Left, Right, Down (user)
+        table_area = QGridLayout()
+        table_area.setColumnStretch(0, 1)
+        table_area.setColumnStretch(1, 2)
+        table_area.setColumnStretch(2, 1)
+        table_area.setRowStretch(0, 1)
+        table_area.setRowStretch(1, 0)
+        table_area.setRowStretch(2, 1)
+
+        # Create player widgets
+        self.up_widget = self._create_player_widget("Bot Up")
+        self.left_widget = self._create_player_widget("Bot Left")
+        self.right_widget = self._create_player_widget("Bot Right")
+        self.down_widget = self._create_player_widget(self.player_name, user=True)
+
+        # Place them
+        table_area.addWidget(self.up_widget, 0, 1, alignment=Qt.AlignCenter)
+        table_area.addWidget(self.left_widget, 1, 0, alignment=Qt.AlignLeft)
+        table_area.addWidget(self.right_widget, 1, 2, alignment=Qt.AlignRight)
+        table_area.addWidget(self.down_widget, 2, 1, alignment=Qt.AlignCenter)
+
+        # Center column: pot + chips + game phase + bet controls
+        center_col_layout = QVBoxLayout()
+        center_col_layout.setAlignment(Qt.AlignCenter)
+        self.game_phase_label = QLabel("Phase: ")
+        self.game_phase_label.setFont(QFont('Arial', 16))
+        self.pot_label = QLabel("Pot: 0")
+        self.pot_label.setFont(QFont('Arial', 14))
+        self.pot_label.setAlignment(Qt.AlignCenter)
+        self.chips_widget = QLabel("CHIPS PLACEHOLDER")
+        self.chips_widget.setMinimumSize(200, 40)
+        self.chips_widget.setStyleSheet("background: #bbb; border: 2px solid #888; border-radius: 8px;")
+
+        # Bet input
+        self.bet_input = QLineEdit(self)
+        self.bet_input.setPlaceholderText("Amount")
+        self.bet_input.setFixedWidth(120)
+        self.bet_button = QPushButton("Place Bet", self)
+        self.bet_button.setFixedWidth(100)
+        self.bet_button.clicked.connect(self._on_bet_submitted)
+
+        # Discard controls
+        self.discard_button = QPushButton("Discard Selected", self)
+        self.discard_button.setFixedWidth(140)
+        self.discard_button.clicked.connect(self._on_discard_clicked)
+
+        center_col_layout.addWidget(self.game_phase_label, alignment=Qt.AlignCenter)
+        center_col_layout.addWidget(self.pot_label, alignment=Qt.AlignCenter)
+        center_col_layout.addSpacing(8)
+        center_col_layout.addWidget(self.chips_widget, alignment=Qt.AlignCenter)
+        center_col_layout.addSpacing(12)
+        bet_row = QHBoxLayout()
+        bet_row.addWidget(QLabel("Enter your bet:"))
+        bet_row.addWidget(self.bet_input)
+        bet_row.addWidget(self.bet_button)
+        center_col_layout.addLayout(bet_row)
+        center_col_layout.addSpacing(8)
+        center_col_layout.addWidget(self.discard_button, alignment=Qt.AlignCenter)
+
+        layout.addLayout(table_area)
+        center_col_widget = QWidget()
+        center_col_widget.setLayout(center_col_layout)
+        layout.addWidget(center_col_widget)
+        self.setLayout(layout)
+
+    def _create_player_widget(self, name, user=False):
+        widget = QWidget()
+        vbox = QVBoxLayout()
+        name_label = QLabel(name)
+        name_label.setFont(QFont('Arial', 16))
+        vbox.addWidget(name_label, alignment=Qt.AlignCenter)
+        hand_layout = QHBoxLayout()
+        hand_layout.setSpacing(4)
+        labels = []
+        for i in range(5):
+            if user:
+                lbl = FiveCardPokerGameScreen.ClickableLabel(self)
+            else:
+                lbl = QLabel(self)
+            lbl.setFixedSize(80, 120)
+            pix = QPixmap("cards_graphic/card_back.png").scaled(80, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            lbl.setPixmap(pix)
+            hand_layout.addWidget(lbl)
+            labels.append(lbl)
+        vbox.addLayout(hand_layout)
+        bet_label = QLabel("Bet: 0")
+        bet_label.setFont(QFont('Arial', 12))
+        bet_label.setAlignment(Qt.AlignCenter)
+        vbox.addWidget(bet_label, alignment=Qt.AlignCenter)
+        widget.setLayout(vbox)
+        widget.name_label = name_label
+        widget.card_labels = labels
+        widget.bet_label = bet_label
+        if user:
+            self.user_card_labels = labels
+        return widget
+
+    def set_player_name(self, player_name):
+        self.player_name = player_name
+        try:
+            self.down_widget.name_label.setText(player_name)
+        except Exception:
+            pass
+
+    def set_bot_count(self, bot_count):
+        # Fixed to 3 bots for four players total
+        self.bot_count = max(0, min(3, bot_count))
+
+    def start_game(self):
+        player_names = [self.player_name] + [f"Bot{i}" for i in range(1, self.bot_count + 1)]
+        # Pad/trim bot names to 3
+        bot_names = (player_names[1:4])
+        player_names = [self.player_name] + bot_names
+        self.engine = FiveCardPoker(
+            player_names,
+            action_callback=self._on_action_requested,
+            phase_callback=self._on_phase,
+            pot_update_callback=self._update_pot,
+            bot_bet_update_callback=self._update_bot_bet,
+            bot_fold_callback=self._on_bot_fold,
+        )
+        self.engine.start_game()
+
+    def _on_card_clicked(self, label):
+        # Maintain selection up to 3 cards; deselect oldest if >3
+        try:
+            idx = self.user_card_labels.index(label)
+        except ValueError:
+            return
+        if label.selected:
+            self._selected_indices.add(idx)
+            if len(self._selected_indices) > 3:
+                # Deselect the earliest selected
+                first_idx = next(iter(self._selected_indices))
+                self._selected_indices.remove(first_idx)
+                lbl = self.user_card_labels[first_idx]
+                if isinstance(lbl, FiveCardPokerGameScreen.ClickableLabel):
+                    lbl.selected = False
+                    lbl.update_selection_style()
+        else:
+            self._selected_indices.discard(idx)
+
+    def _update_pot(self, amount):
+        self.pot_label.setText(f"Pot: {amount}")
+
+    def _update_bot_bet(self, bot_index, amount):
+        # bot_index: 0 for Bot1, 1 for Bot2, 2 for Bot3
+        try:
+            targets = [self.left_widget, self.right_widget, self.up_widget]
+            if 0 <= bot_index < len(targets):
+                targets[bot_index].bet_label.setText(f"Bet: {amount}")
+        except Exception:
+            pass
+
+    def _on_bot_fold(self, bot_index, hand):
+        try:
+            targets = [self.left_widget, self.right_widget, self.up_widget]
+            wid = targets[bot_index]
+            wid.bet_label.setText("Folded")
+            # Reveal first two cards for flavor
+            for i, card in enumerate(hand[:2]):
+                pix = QPixmap(f"cards_graphic/{card}.png").scaled(80, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                wid.card_labels[i].setPixmap(pix)
+        except Exception:
+            pass
+
+    def _on_phase(self, phase, *args):
+        # Update game_phase label and hands based on phase
+        self.game_phase_label.setText(f"Phase: {phase}")
+        if phase == "update_hands" and args:
+            players = args[0]
+            self._render_all_hands(players)
+        elif phase == "deal_new_cards":
+            # After discards, new cards will be dealt automatically by engine; hands will update via update_hands
+            pass
+        elif phase == "winner" and args:
+            # args: [winner_names, winning_hand, pot]
+            pass
+
+    def _render_all_hands(self, players):
+        # Map players to widgets: assume names order [You, Bot1, Bot2, Bot3]
+        try:
+            by_name = {p.name: p for p in players}
+            # User
+            self._render_hand_to_widget(self.down_widget, by_name.get(self.player_name))
+            # Bots
+            for tag, wid_name in zip([self.left_widget, self.right_widget, self.up_widget], ["Bot1", "Bot2", "Bot3"]):
+                self._render_hand_to_widget(tag, by_name.get(wid_name))
+        except Exception:
+            pass
+
+    def _render_hand_to_widget(self, widget, player):
+        labels = getattr(widget, 'card_labels', [])
+        hand = player.hand if player and hasattr(player, 'hand') else []
+        for i, lbl in enumerate(labels):
+            if i < len(hand):
+                card = hand[i]
+                pix = QPixmap(f"cards_graphic/{card}.png").scaled(80, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                lbl.setPixmap(pix)
+            else:
+                back = QPixmap("cards_graphic/card_back.png").scaled(80, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                lbl.setPixmap(back)
+
+    def _on_action_requested(self, *args):
+        # Engine will call with ('discard_count_phase', player_name, 'discard_count')
+        # or ('cards_to_discard_phase', player_name, num_to_discard)
+        # or ('to_call', to_call)
+        if not args:
+            return None
+        action = args[0]
+        if action == "discard_count_phase":
+            player_name = args[1]
+            self.game_phase_label.setText("Phase: Select up to 3 cards and click Discard")
+            # Return how many currently selected
+            return min(3, len(self._selected_indices))
+        elif action == "cards_to_discard_phase":
+            # Return specific indices
+            player_name = args[1]
+            requested = args[2]
+            indices = sorted(list(self._selected_indices))[:requested]
+            # Clear selection after providing indices
+            for idx in list(self._selected_indices):
+                lbl = self.user_card_labels[idx]
+                if isinstance(lbl, FiveCardPokerGameScreen.ClickableLabel):
+                    lbl.selected = False
+                    lbl.update_selection_style()
+            self._selected_indices.clear()
+            return indices
+        elif action == "to_call":
+            to_call = args[1]
+            self._pending_to_call = int(to_call)
+            self.game_phase_label.setText(f"Phase: To call {to_call}. Enter bet and Place Bet")
+            # Return nothing; we'll resume later via betting_run
+            return None
+        return None
+
+    def _on_bet_submitted(self):
+        # Resume betting by updating the current human player's bet
+        try:
+            node = getattr(self.engine, '_last_human_node', None)
+            if node is None:
+                # Fallback: nothing to do
+                return
+            player = node.player
+            amount_text = self.bet_input.text().strip()
+            amount = int(amount_text) if amount_text else 0
+            # Ensure at least to_call
+            if amount < self._pending_to_call:
+                amount = self._pending_to_call
+            # Adjust bet via add_bet
+            player.add_bet(amount)
+            # Continue betting loop
+            self.engine.betting_run()
+        except Exception:
+            pass
+
+    def _on_discard_clicked(self):
+        # Trigger discard flow: the engine will call our action_callback
+        # We simply update phase label; engine will read selected cards via callback
+        self.game_phase_label.setText("Phase: Discarding selected cards...")
+        
+        
 
     
 
@@ -1537,7 +1866,7 @@ class PokerGameScreen(QWidget):
         
     
 class WelcomeScreen(QWidget):
-    def __init__(self, poker_callback, blackjack_callback):
+    def __init__(self, poker_callback, blackjack_callback, five_card_poker_callback):
         super().__init__()
         self.setWindowTitle('Poker Game')
         
@@ -1565,13 +1894,17 @@ class WelcomeScreen(QWidget):
         
         startBlackjackButton = QPushButton('Start Blackjack Game', self)
         startBlackjackButton.clicked.connect(self.on_start_blackjack_game)
+        startFiveCardButton = QPushButton('Start Five Card Poker Game', self)
+        startFiveCardButton.clicked.connect(self.on_start_fivecard_game)
         self.poker_callback = poker_callback
         self.blackjack_callback = blackjack_callback
+        self.five_card_poker_callback = five_card_poker_callback
         
         games_widget= QWidget()
         games_layout = QHBoxLayout()
         games_layout.addWidget(startPokerButton)
         games_layout.addWidget(startBlackjackButton)
+        games_layout.addWidget(startFiveCardButton)
         games_widget.setLayout(games_layout)
         
         layout.addWidget(titleLabel, alignment=Qt.AlignCenter)
@@ -1592,6 +1925,15 @@ class WelcomeScreen(QWidget):
                                             "Enter number of opponents (1-5):", 2, 1, 5)
         if ok:
             self.blackjack_callback(player_name, bot_count)
+            
+    def on_start_fivecard_game(self):
+        player_name= self.name_input.text() or "You"
+        bot_count, ok = QInputDialog.getInt(self, "Number of Opponents", 
+                                            "Enter number of opponents (1-3):", 2, 1, 3)
+        if ok:
+            self.five_card_poker_callback(player_name, bot_count)
+            
+        
 if __name__ == "__main__":
     app = QApplication([])
     window = MainWindow()

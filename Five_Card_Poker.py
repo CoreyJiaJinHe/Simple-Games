@@ -235,7 +235,66 @@ class FiveCardPoker():
                         self._betting_need_to_act = self.get_ordered_active_nodes_after(node)
                         continue
             # If no raise and player acted, continue to next in queue
+    
+    def betting_next(self): #For GUI
+        # If no one left to act, finish the betting round
+        if not self._betting_need_to_act:
+            self.pot = sum(node.player.bet for node in self.player_nodes)
+            #print(f"Total pot is now: {self.pot}\n")
+            if self._betting_done_callback:
+                self._betting_done_callback()
+            return
 
+        node = self._betting_need_to_act.pop(0)
+        player = node.player
+        if player.isFolded or player.wallet <= 0:
+            self.betting_next()
+            return
+        if self._betting_current_bet > 0 and player.current_bet == self._betting_current_bet:
+            self.betting_next()
+            return
+
+        to_call = max(0, self._betting_current_bet - player.current_bet)
+        print(f"{player.name}'s turn. Current bet to call: {to_call}. Wallet: {player.wallet}")
+
+        #wallet_before = player.wallet
+        if player.isBot:
+            self.bot_set_bet(player, to_call, round_number=self.current_round_number)
+            bot_index = self.players.index(player) - 1  # Adjust for human player at index 0
+            # Check to see if the bot folds before updating wallet/pot/callbacks
+            if player.isFolded:
+                if self.bot_fold_callback:
+                    self.bot_fold_callback(bot_index, hand=player.hand)
+                # Skip wallet/pot/bet updates for folded bot
+                self.betting_next()
+                return
+            #wallet_after = player.wallet
+            #delta = wallet_after - wallet_before
+            self.pot = sum(node.player.bet for node in self.player_nodes)
+            if self.pot_update_callback:
+                self.pot_update_callback(self.pot)
+            if self.bot_bet_update_callback:
+                self.bot_bet_update_callback(bot_index, player.current_bet)
+            #self.db_helper.update_player_wallet(player.name, delta)
+            if player.current_bet > self._betting_current_bet:
+                # Update the current bet and requeue all others except this player
+                self._betting_current_bet = player.current_bet
+                self._betting_need_to_act = self.get_ordered_active_nodes_after(node)
+            self.betting_next()
+        else:
+            # For human, call the callback and wait for GUI to resume
+            if self.action_callback:
+                self._last_human_node = node  # Save for resume
+                self._last_human_bet = player.current_bet  # Save for resume
+                self.action_callback("to_call", to_call)
+            else:
+                player.set_bet(to_call)
+                if player.current_bet > self._betting_current_bet:
+                    # Update the current bet and requeue all others except this player
+                    self._betting_current_bet = player.current_bet
+                    self._betting_need_to_act = self.get_ordered_active_nodes_after(node)
+                self.betting_next()
+            # Wait for GUI to call resume_betting_round()
     def showdown(self):
         print(f"The final pot total is: {self.pot}\n")
         self.show_hands()
