@@ -70,6 +70,7 @@ class FiveCardPoker():
         self._betting_need_to_act = None
         self._betting_current_bet = None
         self._betting_done_callback = None
+        self._waiting_for_discard = False
 
     def get_main_player_node(self):
         # Helper to retrieve the non-bot (human) player's node
@@ -85,35 +86,66 @@ class FiveCardPoker():
             for node in self.player_nodes:
                 card = self.dealer.deal_card()
                 node.player.hand.append(card)
-
+        if (self.phase_callback):
+            self.phase_callback("update_initial_hands", self.players)
+            
+            
     def discard_phase(self):
-        # Ask each player how many cards they want to discard, then which ones, then deal new cards to those who discarded.
         for node in self.player_nodes:
             player = node.player
+
             if player.isBot:
-                break
-                num_to_discard = player.decide_discard(self.hand_evaluator)
+                continue
+                num_to_discard = 0
+                if hasattr(player, "decide_discard"):
+                    try:
+                        num_to_discard = player.decide_discard(self.evaluator)
+                    except Exception:
+                        num_to_discard = 0
+                if num_to_discard > 0 and hasattr(player, "choose_discard_indices"):
+                    try:
+                        indices_to_discard = player.choose_discard_indices(num_to_discard)
+                    except Exception:
+                        indices_to_discard = []
+                    for index in sorted(indices_to_discard[:3], reverse=True):
+                        player.discard_card(self.dealer, index)
+                continue
+
+            if self.action_callback:
+                indices_to_discard = self.action_callback(
+                    "cards_to_discard_phase",
+                    {
+                        "player_name": player.name,
+                        "max_to_discard": 3,
+                    },
+                )
+                if indices_to_discard is None:
+                    self._waiting_for_discard = True
+                    return
+                safe_indices = []
+                for idx in indices_to_discard[:3]:
+                    try:
+                        parsed_idx = int(idx)
+                    except Exception:
+                        continue
+                    if 0 <= parsed_idx < len(player.hand):
+                        safe_indices.append(parsed_idx)
+                for index in sorted(set(safe_indices), reverse=True):
+                    player.discard_card(self.dealer, index)
+            else:
+                num_to_discard = int(input(f"{player.name}, how many cards would you like to discard? (0-3): "))
                 if num_to_discard > 0:
-                    indices_to_discard = player.choose_discard_indices(num_to_discard)
-                    for index in sorted(indices_to_discard, reverse=True):
+                    indices_to_discard = input(f"Which card indices would you like to discard? (0-{len(player.hand)-1}, separate by commas): ")
+                    indices_to_discard = [int(idx.strip()) for idx in indices_to_discard.split(",")]
+                    for index in sorted(indices_to_discard[:num_to_discard], reverse=True):
                         player.discard_card(self.dealer, index)
 
-            else:
-                if self.action_callback:
-                    num_to_discard = self.action_callback("discard_count_phase", player.name, "discard_count")
-                else:
-                    num_to_discard = int(input(f"{player.name}, how many cards would you like to discard? (0-3): "))
-                if num_to_discard > 0:
-                    if (self.action_callback):
-                        indices_to_discard = self.action_callback("cards_to_discard_phase", player.name, num_to_discard)
-                    else:
-                        indices_to_discard = input(f"Which card indices would you like to discard? (0-{len(player.hand)-1}, separate by commas): ")
-                        indices_to_discard = [int(idx.strip()) for idx in indices_to_discard.split(",")]
-                    for index in sorted(indices_to_discard, reverse=True):
-                        player.discard_card(self.dealer, index)
-        if (self.phase_callback):
-            self.phase_callback("deal_new_cards")
+        self._waiting_for_discard = False
         self.deal_new_cards()
+
+    def resume_discard_phase(self):
+        if self._waiting_for_discard:
+            self.discard_phase()
         
     def deal_new_cards(self):
         #We need to loop through the players again and deal new cards to those who discarded. 
@@ -149,6 +181,7 @@ class FiveCardPoker():
         pass
     
     def betting_round(self, minimum_bet=10, round_name="betting_round"):
+        print(f"DEBUG: Starting betting round: {round_name} with minimum bet: {minimum_bet}")
         # Set round_number based on round_name if not already set
         if round_name == "initial_betting_round":
             self.current_round_number = 1
@@ -225,7 +258,13 @@ class FiveCardPoker():
                 if self.action_callback:
                     self._last_human_node = node
                     self._last_human_bet = player.current_bet
-                    self.action_callback("to_call", to_call)
+                    self.action_callback(
+                        "to_call",
+                        {
+                            "to_call": to_call,
+                            "player_name": player.name,
+                        },
+                    )
                     # Wait for external resume; exit loop
                     break
                 else:
@@ -286,7 +325,13 @@ class FiveCardPoker():
             if self.action_callback:
                 self._last_human_node = node  # Save for resume
                 self._last_human_bet = player.current_bet  # Save for resume
-                self.action_callback("to_call", to_call)
+                self.action_callback(
+                    "to_call",
+                    {
+                        "to_call": to_call,
+                        "player_name": player.name,
+                    },
+                )
             else:
                 player.set_bet(to_call)
                 if player.current_bet > self._betting_current_bet:
@@ -311,11 +356,11 @@ class FiveCardPoker():
 
         players = [p for p in self.players if not p.isFolded]
         # Guard: if any active player has an empty hand, determining a winner will fail
-        if any(len(p.hand) == 0 for p in players):
-            print("Warning: One or more active players have empty hands. Deal or set hands before showdown.")
-            if self.phase_callback:
-                self.phase_callback("winner", [[], [], self.pot])
-            return
+        # if any(len(p.hand) == 0 for p in players):
+        #     print("Warning: One or more active players have empty hands. Deal or set hands before showdown.")
+        #     if self.phase_callback:
+        #         self.phase_callback("winner", [[], [], self.pot])
+        #     return
         for player in players:
             hand = player.hand
             print (hand)
@@ -442,12 +487,12 @@ class FiveCardPoker():
                         if suit_rank[player_high_suit] > suit_rank[winner_high_suit]:
                             winning_hand = result
                             winners = [player]
-        # Announce winners and split pot if tied
-        if not winners:
-            print("No winner could be determined. Ensure hands are set correctly.")
-            if self.phase_callback:
-                self.phase_callback("winner", [[], [], self.pot])
-            return
+        # # Announce winners and split pot if tied
+        # if not winners:
+        #     print("No winner could be determined. Ensure hands are set correctly.")
+        #     if self.phase_callback:
+        #         self.phase_callback("winner", [[], [], self.pot])
+        #     return
         
         winner_names = [p.name for p in winners]
         if self.phase_callback:
