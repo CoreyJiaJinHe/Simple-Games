@@ -59,6 +59,7 @@ class FiveCardPoker():
         self.pot = 0
         self.current_bet = 0
         self.current_round_number = 0
+        self.minimum_bet=10
         
         
         self.action_callback = action_callback
@@ -87,7 +88,7 @@ class FiveCardPoker():
                 card = self.dealer.deal_card()
                 node.player.hand.append(card)
         if (self.phase_callback):
-            self.phase_callback("update_initial_hands", self.players)
+            self.phase_callback("update_initial_hands", {"players": self.players})
             
             
     def discard_phase(self):
@@ -119,6 +120,7 @@ class FiveCardPoker():
                         "max_to_discard": 3,
                     },
                 )
+                print (f"Player {player.name} wants to discard indices: {indices_to_discard}")
                 if indices_to_discard is None:
                     self._waiting_for_discard = True
                     return
@@ -163,10 +165,10 @@ class FiveCardPoker():
                 current_node = current_node.next
         print("All players have 5 cards again. Ending deal phase.")
         if (self.phase_callback):
-            self.phase_callback("update_hands", self.players)
+            self.phase_callback("update_hands", {"players": self.players})
             #self.action_callback("final_betting_round")
             
-        self.betting_round(minimum_bet=10, round_name="final_betting_round")
+        self.betting_round(minimum_bet=0, round_name="final_betting_round")
     
     def get_ordered_active_nodes_after(self, raiser_node):
         result = []
@@ -178,7 +180,15 @@ class FiveCardPoker():
         return result
     
     def bot_set_bet(self, player, to_call, round_number):
-        pass
+        if player.isFolded or player.wallet <= 0:
+            return
+
+        required_to_call = max(0, int(to_call))
+        if required_to_call == 0:
+            return
+
+        wager = min(required_to_call, player.wallet)
+        player.add_to_bet(wager)
     
     def betting_round(self, minimum_bet=10, round_name="betting_round"):
         print(f"DEBUG: Starting betting round: {round_name} with minimum bet: {minimum_bet}")
@@ -187,6 +197,12 @@ class FiveCardPoker():
             self.current_round_number = 1
         elif round_name == "final_betting_round":
             self.current_round_number = 2
+
+        # Round-local bet tracking must reset each round so players act again
+        # in the final betting phase after discard/draw.
+        for node in self.player_nodes:
+            node.player.current_bet = 0
+
         # Initialize betting state
         self._betting_current_bet = minimum_bet
         
@@ -263,6 +279,12 @@ class FiveCardPoker():
                         {
                             "to_call": to_call,
                             "player_name": player.name,
+                            "round_number": self.current_round_number,
+                            "round_name": (
+                                "initial_betting_round"
+                                if self.current_round_number == 1
+                                else "final_betting_round"
+                            ),
                         },
                     )
                     # Wait for external resume; exit loop
@@ -275,71 +297,71 @@ class FiveCardPoker():
                         continue
             # If no raise and player acted, continue to next in queue
     
-    def betting_next(self): #For GUI
-        # If no one left to act, finish the betting round
-        if not self._betting_need_to_act:
-            self.pot = sum(node.player.bet for node in self.player_nodes)
-            #print(f"Total pot is now: {self.pot}\n")
-            if self._betting_done_callback:
-                self._betting_done_callback()
-            return
+    # def betting_next(self): #For GUI
+    #     # If no one left to act, finish the betting round
+    #     if not self._betting_need_to_act:
+    #         self.pot = sum(node.player.bet for node in self.player_nodes)
+    #         #print(f"Total pot is now: {self.pot}\n")
+    #         if self._betting_done_callback:
+    #             self._betting_done_callback()
+    #         return
 
-        node = self._betting_need_to_act.pop(0)
-        player = node.player
-        if player.isFolded or player.wallet <= 0:
-            self.betting_next()
-            return
-        if self._betting_current_bet > 0 and player.current_bet == self._betting_current_bet:
-            self.betting_next()
-            return
+    #     node = self._betting_need_to_act.pop(0)
+    #     player = node.player
+    #     if player.isFolded or player.wallet <= 0:
+    #         self.betting_next()
+    #         return
+    #     if self._betting_current_bet > 0 and player.current_bet == self._betting_current_bet:
+    #         self.betting_next()
+    #         return
 
-        to_call = max(0, self._betting_current_bet - player.current_bet)
-        print(f"{player.name}'s turn. Current bet to call: {to_call}. Wallet: {player.wallet}")
+    #     to_call = max(0, self._betting_current_bet - player.current_bet)
+    #     print(f"{player.name}'s turn. Current bet to call: {to_call}. Wallet: {player.wallet}")
 
-        #wallet_before = player.wallet
-        if player.isBot:
-            self.bot_set_bet(player, to_call, round_number=self.current_round_number)
-            bot_index = self.players.index(player) - 1  # Adjust for human player at index 0
-            # Check to see if the bot folds before updating wallet/pot/callbacks
-            if player.isFolded:
-                if self.bot_fold_callback:
-                    self.bot_fold_callback(bot_index, hand=player.hand)
-                # Skip wallet/pot/bet updates for folded bot
-                self.betting_next()
-                return
-            #wallet_after = player.wallet
-            #delta = wallet_after - wallet_before
-            self.pot = sum(node.player.bet for node in self.player_nodes)
-            if self.pot_update_callback:
-                self.pot_update_callback(self.pot)
-            if self.bot_bet_update_callback:
-                self.bot_bet_update_callback(bot_index, player.current_bet)
-            #self.db_helper.update_player_wallet(player.name, delta)
-            if player.current_bet > self._betting_current_bet:
-                # Update the current bet and requeue all others except this player
-                self._betting_current_bet = player.current_bet
-                self._betting_need_to_act = self.get_ordered_active_nodes_after(node)
-            self.betting_next()
-        else:
-            # For human, call the callback and wait for GUI to resume
-            if self.action_callback:
-                self._last_human_node = node  # Save for resume
-                self._last_human_bet = player.current_bet  # Save for resume
-                self.action_callback(
-                    "to_call",
-                    {
-                        "to_call": to_call,
-                        "player_name": player.name,
-                    },
-                )
-            else:
-                player.set_bet(to_call)
-                if player.current_bet > self._betting_current_bet:
-                    # Update the current bet and requeue all others except this player
-                    self._betting_current_bet = player.current_bet
-                    self._betting_need_to_act = self.get_ordered_active_nodes_after(node)
-                self.betting_next()
-            # Wait for GUI to call resume_betting_round()
+    #     #wallet_before = player.wallet
+    #     if player.isBot:
+    #         self.bot_set_bet(player, to_call, round_number=self.current_round_number)
+    #         bot_index = self.players.index(player) - 1  # Adjust for human player at index 0
+    #         # Check to see if the bot folds before updating wallet/pot/callbacks
+    #         if player.isFolded:
+    #             if self.bot_fold_callback:
+    #                 self.bot_fold_callback(bot_index, hand=player.hand)
+    #             # Skip wallet/pot/bet updates for folded bot
+    #             self.betting_next()
+    #             return
+    #         #wallet_after = player.wallet
+    #         #delta = wallet_after - wallet_before
+    #         self.pot = sum(node.player.bet for node in self.player_nodes)
+    #         if self.pot_update_callback:
+    #             self.pot_update_callback(self.pot)
+    #         if self.bot_bet_update_callback:
+    #             self.bot_bet_update_callback(bot_index, player.current_bet)
+    #         #self.db_helper.update_player_wallet(player.name, delta)
+    #         if player.current_bet > self._betting_current_bet:
+    #             # Update the current bet and requeue all others except this player
+    #             self._betting_current_bet = player.current_bet
+    #             self._betting_need_to_act = self.get_ordered_active_nodes_after(node)
+    #         self.betting_next()
+    #     else:
+    #         # For human, call the callback and wait for GUI to resume
+    #         if self.action_callback:
+    #             self._last_human_node = node  # Save for resume
+    #             self._last_human_bet = player.current_bet  # Save for resume
+    #             self.action_callback(
+    #                 "to_call",
+    #                 {
+    #                     "to_call": to_call,
+    #                     "player_name": player.name,
+    #                 },
+    #             )
+    #         else:
+    #             player.set_bet(to_call)
+    #             if player.current_bet > self._betting_current_bet:
+    #                 # Update the current bet and requeue all others except this player
+    #                 self._betting_current_bet = player.current_bet
+    #                 self._betting_need_to_act = self.get_ordered_active_nodes_after(node)
+    #             self.betting_next()
+    #         # Wait for GUI to call resume_betting_round()
     def showdown(self):
         print(f"The final pot total is: {self.pot}\n")
         self.show_hands()
@@ -354,26 +376,41 @@ class FiveCardPoker():
         winning_hand = []
         winners = []  # list[Player]
 
+        def normalize_card_list(value):
+            cards = []
+
+            def collect(item):
+                if isinstance(item, str):
+                    cards.append(item)
+                elif isinstance(item, (list, tuple)):
+                    for nested_item in item:
+                        collect(nested_item)
+
+            collect(value)
+            return cards
+
         players = [p for p in self.players if not p.isFolded]
         # Guard: if any active player has an empty hand, determining a winner will fail
         # if any(len(p.hand) == 0 for p in players):
         #     print("Warning: One or more active players have empty hands. Deal or set hands before showdown.")
         #     if self.phase_callback:
-        #         self.phase_callback("winner", [[], [], self.pot])
+        #         self.phase_callback("winner", {"winner_names": [], "winning_hand": [], "pot": self.pot})
         #     return
         for player in players:
             hand = player.hand
             print (hand)
             rank, result, hand_name = self.evaluator.evaluate_hand(hand, [])
-            print(f"{player.name} has {hand_name}: {show_substituted(result)}")
+            result_cards = normalize_card_list(result)
+            print(f"{player.name} has {hand_name}: {show_substituted(result_cards)}")
             if rank > highest_rank:
                 highest_rank = rank
                 winning_hand = result
                 winners = [player]
             if rank == highest_rank and winners:
+                winning_hand_cards = normalize_card_list(winning_hand)
                 # Precompute highest card ranks for both current winner and player
-                highest_rank_winner = self.evaluator.get_highest_rank(winning_hand)
-                highest_rank_player = self.evaluator.get_highest_rank(result)
+                highest_rank_winner = self.evaluator.get_highest_rank(winning_hand_cards)
+                highest_rank_player = self.evaluator.get_highest_rank(result_cards)
                 #Check suits and check highest card in the hand to break ties. 
                 # This is a simplified tie-breaking logic and may not cover all cases.
                 if (rank in [2, 3]): #Pair, Two Pair
@@ -383,8 +420,8 @@ class FiveCardPoker():
                         ranks = [self.evaluator.remove_suit_card(c) for c in cards]
                         unique = sorted(set(ranks), key=lambda r: rank_list.index(r), reverse=True)
                         return unique
-                    winner_pair_ranks = get_pair_ranks(winning_hand)
-                    player_pair_ranks = get_pair_ranks(result)
+                    winner_pair_ranks = get_pair_ranks(winning_hand_cards)
+                    player_pair_ranks = get_pair_ranks(result_cards)
 
                     # Compare highest pair first
                     def rank_val(r):
@@ -422,8 +459,8 @@ class FiveCardPoker():
                                 winners = [player]
                             elif player_high_card == winner_high_card:
                                 # Only pairs use suit precedence
-                                winner_high_suit = self.evaluator.get_highest_suit(winning_hand)
-                                player_high_suit = self.evaluator.get_highest_suit(result)
+                                winner_high_suit = self.evaluator.get_highest_suit(winning_hand_cards)
+                                player_high_suit = self.evaluator.get_highest_suit(result_cards)
                                 suit_rank = {"H": 4, "D": 3, "C": 2, "S": 1}
                                 if suit_rank[player_high_suit] > suit_rank[winner_high_suit]:
                                     winning_hand = result
@@ -458,8 +495,8 @@ class FiveCardPoker():
                         #If highest ranks are the same, we can compare the next highest card, 
                         #and so on until we find a difference or run out of cards to compare. 
                         #If we run out of cards to compare, then its a tie.
-                        sorted_winner_hand = self.evaluator.sort_hand(winning_hand)
-                        sorted_player_hand = self.evaluator.sort_hand(result)
+                        sorted_winner_hand = self.evaluator.sort_hand(winning_hand_cards)
+                        sorted_player_hand = self.evaluator.sort_hand(result_cards)
                         decided = False
                         for w_card, p_card in zip(reversed(sorted_winner_hand), reversed(sorted_player_hand)):
                             if self.evaluator.remove_suit_card(p_card) > self.evaluator.remove_suit_card(w_card):
@@ -481,8 +518,8 @@ class FiveCardPoker():
                         winners = [player]
                     elif highest_rank_player == highest_rank_winner:
                          # If high card ranks are equal, compare suits of the high card
-                        winner_high_suit = self.evaluator.get_highest_suit(winning_hand)
-                        player_high_suit = self.evaluator.get_highest_suit(result)
+                        winner_high_suit = self.evaluator.get_highest_suit(winning_hand_cards)
+                        player_high_suit = self.evaluator.get_highest_suit(result_cards)
                         suit_rank = {"H": 4, "D": 3, "C": 2, "S": 1}
                         if suit_rank[player_high_suit] > suit_rank[winner_high_suit]:
                             winning_hand = result
@@ -491,14 +528,22 @@ class FiveCardPoker():
         # if not winners:
         #     print("No winner could be determined. Ensure hands are set correctly.")
         #     if self.phase_callback:
-        #         self.phase_callback("winner", [[], [], self.pot])
+        #         self.phase_callback("winner", {"winner_names": [], "winning_hand": [], "pot": self.pot})
         #     return
         
         winner_names = [p.name for p in winners]
+        winning_hand_cards = normalize_card_list(winning_hand)
         if self.phase_callback:
-            self.phase_callback("winner", [winner_names, winning_hand, self.pot])
+            self.phase_callback(
+                "winner",
+                {
+                    "winner_names": winner_names,
+                    "winning_hand": winning_hand_cards,
+                    "pot": self.pot,
+                },
+            )
         if len(winner_names) > 1:
-            print(f"Tie: {', '.join(winner_names)} with hand: {show_substituted(winning_hand)}")
+            print(f"Tie: {', '.join(winner_names)} with hand: {show_substituted(winning_hand_cards)}")
             share = self.pot // len(winners)
             remainder = self.pot % len(winners)
             for idx, w in enumerate(winners):
@@ -508,7 +553,7 @@ class FiveCardPoker():
             self.db_helper.log_game("Poker", ', '.join([p.name for p in players]), ', '.join(winner_names), self.pot)
         else:
             leader = winners[0]
-            print(f"The winner is {leader.name} with hand: {show_substituted(winning_hand)}")
+            print(f"The winner is {leader.name} with hand: {show_substituted(winning_hand_cards)}")
             self.award_player(leader, self.pot)
             self.db_helper.log_game("Poker", ', '.join([p.name for p in players]), leader.name, self.pot)
             self.db_helper.update_player_stats(leader.name, self.pot, True, self.pot)
@@ -534,7 +579,7 @@ class FiveCardPoker():
     
     def debug_start_game(self):
         self.debug_deal_hands()
-        self.betting_round(minimum_bet=10, round_name="initial_betting_round")
+        self.betting_round(minimum_bet=self.minimum_bet, round_name="initial_betting_round")
     
     def start_game(self):
         # self.debug_start_game()
@@ -549,7 +594,7 @@ class FiveCardPoker():
         self.show_only_player_hand()
         
         #self.show_hands()
-        self.betting_round(minimum_bet=10, round_name="initial_betting_round")
+        self.betting_round(minimum_bet=self.minimum_bet, round_name="initial_betting_round")
         #Now figure out who wants to discard cards. Can discard up to three.
         #Cards are discarded simultaneously, so we ask each player how many cards they want to discard, 
         #Then we go around again and ask which ones.
