@@ -9,10 +9,35 @@ from blackjack import BlackJack as BlackjackGame
 from game import Database_Helper as DBHelper
 BLACKJACK_DEBUG_EXPAND_WINDOW = False
 
+
+class GameHostWindow(QWidget):
+    def __init__(self, title, game_screen, on_close_callback):
+        super().__init__()
+        self._on_close_callback = on_close_callback
+        self.setWindowTitle(title)
+        close_shortcut = QShortcut(QKeySequence("Ctrl+W"), self)
+        close_shortcut.activated.connect(self.close)
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(game_screen)
+        self.setLayout(layout)
+
+    def closeEvent(self, event):
+        try:
+            if callable(self._on_close_callback):
+                self._on_close_callback()
+        except Exception:
+            pass
+        super().closeEvent(event)
+
 class MainWindow(QWidget):
+    _size_debug = False
+
     def __init__(self,):
         super().__init__()
+        self.setWindowFlag(Qt.WindowMaximizeButtonHint, False)
         self.setWindowTitle('Card Games')
+        self.active_game_window = None
         
         # Border frames restored to prior version
         self.outer_frame = QFrame(self)
@@ -39,85 +64,125 @@ class MainWindow(QWidget):
             blackjack_callback=self.show_blackjack_game_screen,
             five_card_poker_callback=self.show_five_card_poker_game_screen
         )
-        self.poker_game_screen = PokerGameScreen(parent=self)
-        self.five_card_poker_game_screen = FiveCardPokerGameScreen(parent=self)
-        self.blackjack_game_screen = BlackjackGameScreen(parent=self)
 
         self.stacked_widget.addWidget(self.welcome_screen)
-        self.stacked_widget.addWidget(self.poker_game_screen)
-        self.stacked_widget.addWidget(self.five_card_poker_game_screen)
-        self.stacked_widget.addWidget(self.blackjack_game_screen)
         layout = QVBoxLayout()
         layout.addWidget(self.stacked_widget)
         self.setLayout(layout)
         
         self.show_welcome_screen()
 
+    def log_size_debug(self, source):
+        if not getattr(self, "_size_debug", False):
+            return
+        current = self.stacked_widget.currentWidget()
+        current_name = current.__class__.__name__ if current is not None else "None"
+        print(
+            f"[SIZE-DEBUG] {source} | size={self.width()}x{self.height()} "
+            f"min={self.minimumWidth()}x{self.minimumHeight()} "
+            f"max={self.maximumWidth()}x{self.maximumHeight()} "
+            f"state={int(self.windowState())} current={current_name}"
+        )
+
     def show_welcome_screen(self):
+        self.log_size_debug("show_welcome_screen:start")
         self.stacked_widget.setCurrentWidget(self.welcome_screen)
         # Hide outer frames
         self.outer_frame.hide()
         self.middle_frame.hide()
-        # Set a small fixed size for the welcome screen
         self.setMinimumSize(0, 0)
         self.setMaximumSize(600, 600)
         self.resize(420, 320)
         self.setFixedSize(420, 320)
+        self.log_size_debug("show_welcome_screen:end")
+
+    def _on_game_window_closed(self):
+        self.active_game_window = None
+        self.show_welcome_screen()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def _open_game_window(self, title, game_screen, preferred_size):
+        if self.active_game_window is not None:
+            try:
+                self.active_game_window.close()
+            except Exception:
+                pass
+        self.close()
+        host = GameHostWindow(title=title, game_screen=game_screen, on_close_callback=self._on_game_window_closed)
+        host.setFixedSize(preferred_size)
+        host.show()
+        self.active_game_window = host
+
+    def request_return_to_welcome(self, _game_screen=None):
+        if self.active_game_window is not None:
+            self.active_game_window.close()
         
     def show_blackjack_game_screen(self, player_name="You", bot_count=2):
+        self.log_size_debug("show_blackjack_game_screen:start")
         print(f"Starting Blackjack game for {player_name} with {bot_count} bots")
-        # You can prompt for player name and bot count here if needed
-        self.stacked_widget.setCurrentWidget(self.blackjack_game_screen)
-        self.outer_frame.show()
-        self.middle_frame.show()
-        self.blackjack_game_screen.set_bot_count(bot_count)
-        self.blackjack_game_screen.set_player_name(player_name)
-        self.blackjack_game_screen.start_game()
-        try:
-            self.setFixedSize(self.blackjack_game_screen.sizeHint())
-        except Exception:
-            pass
+        game_screen = BlackjackGameScreen(parent=None)
+        game_screen.set_return_to_welcome_callback(self.request_return_to_welcome)
+        game_screen.set_bot_count(5)
+        preferred_size = game_screen.sizeHint()
+        game_screen.set_bot_count(bot_count)
+        game_screen.set_player_name(player_name)
+        game_screen.start_game()
+        self._open_game_window("Blackjack", game_screen, preferred_size)
+        self.log_size_debug("show_blackjack_game_screen:end")
         
         
     def show_poker_game_screen(self, player_name="You", bot_count=2):
+        self.log_size_debug("show_poker_game_screen:start")
         print(f"Starting Poker game for {player_name} vs {bot_count} bots")
-        self.poker_game_screen.set_player_name(player_name)
-        self.poker_game_screen.set_bot_count(bot_count)
-        self.stacked_widget.setCurrentWidget(self.poker_game_screen)
-        # Outermost border (red)
-        self.outer_frame.show()
-        # Middle border (black)
-        self.middle_frame.show()
-        # Keep a compact, stable fixed size for the game screen
-        try:
-            self.setFixedSize(self.poker_game_screen.sizeHint())
-        except Exception:
-            pass
-        # Now start the game; later card additions won't shrink the window
-        # below the size needed for all five dealer/community cards.
-        self.poker_game_screen.start_game()
+        game_screen = PokerGameScreen(parent=None)
+        game_screen.set_return_to_welcome_callback(self.request_return_to_welcome)
+        game_screen.set_bot_count(5)
+        preferred_size = game_screen.sizeHint()
+        game_screen.set_player_name(player_name)
+        game_screen.set_bot_count(bot_count)
+        game_screen.start_game()
+        self._open_game_window("Poker", game_screen, preferred_size)
+        self.log_size_debug("show_poker_game_screen:end")
 
     def show_five_card_poker_game_screen(self, player_name="You", bot_count=3):
+        self.log_size_debug("show_five_card_poker_game_screen:start")
         print(f"Starting Five Card Poker game for {player_name} vs {bot_count} bots")
-        self.five_card_poker_game_screen.set_player_name(player_name)
-        self.five_card_poker_game_screen.set_bot_count(bot_count)
-        self.stacked_widget.setCurrentWidget(self.five_card_poker_game_screen)
-        # Show borders
-        self.outer_frame.show()
-        self.middle_frame.show()
-        # Keep a compact, stable fixed size for the game screen
-        try:
-            self.setFixedSize(self.five_card_poker_game_screen.sizeHint())
-        except Exception:
-            pass
-        self.five_card_poker_game_screen.start_game()
+        game_screen = FiveCardPokerGameScreen(parent=None)
+        game_screen.set_return_to_welcome_callback(self.request_return_to_welcome)
+        game_screen.set_bot_count(3)
+        preferred_size = game_screen.sizeHint()
+        game_screen.set_player_name(player_name)
+        game_screen.set_bot_count(bot_count)
+        game_screen.start_game()
+        self._open_game_window("Five Card Poker", game_screen, preferred_size)
+        self.log_size_debug("show_five_card_poker_game_screen:end")
         
         
     def resizeEvent(self, event):
+        if getattr(self, "_size_debug", False):
+            old_size = event.oldSize()
+            print(
+                f"[SIZE-DEBUG] resizeEvent old={old_size.width()}x{old_size.height()} "
+                f"new={event.size().width()}x{event.size().height()}"
+            )
         # Ensure the background frames fill the window
         self.outer_frame.setGeometry(self.rect())
         self.middle_frame.setGeometry(self.rect().adjusted(8, 8, -8, -8))
         super().resizeEvent(event)
+
+    def moveEvent(self, event):
+        if getattr(self, "_size_debug", False):
+            print(
+                f"[SIZE-DEBUG] moveEvent pos={self.x()},{self.y()} size={self.width()}x{self.height()}"
+            )
+        super().moveEvent(event)
+
+    def changeEvent(self, event):
+        if getattr(self, "_size_debug", False) and event.type() == QEvent.WindowStateChange:
+            self.log_size_debug("changeEvent:WindowStateChange")
+        super().changeEvent(event)
 
 
 
@@ -150,6 +215,8 @@ class FiveCardPokerGameScreen(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.main_window = parent
+        self._return_to_welcome_callback = None
+        self._game_in_progress = False
         self.bot_count = 3
         self.player_name = None
         self.engine = None
@@ -160,10 +227,14 @@ class FiveCardPokerGameScreen(QWidget):
         layout = QVBoxLayout()
 
         # Top bar
+        self.home_button = QPushButton("Home")
+        self.home_button.setFixedWidth(90)
+        self.home_button.clicked.connect(self.on_nav_home_clicked)
         self.wallet_label = QLabel("Wallet: $1000")
         self.wallet_label.setFont(QFont('Arial', 14))
         self.wallet_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         top_bar_layout = QHBoxLayout()
+        top_bar_layout.addWidget(self.home_button, alignment=Qt.AlignLeft)
         top_bar_layout.addStretch()
         top_bar_layout.addWidget(self.wallet_label)
         layout.addLayout(top_bar_layout)
@@ -178,11 +249,12 @@ class FiveCardPokerGameScreen(QWidget):
         table_area.setRowStretch(2, 1)
 
         # Create player widgets
-        
-        
         self.opponent_widgets = []
         for i in range(3):
             opp = self.create_opponent_widget(f"Bot {i+1}")
+            size_policy = opp.sizePolicy()
+            size_policy.setRetainSizeWhenHidden(True)
+            opp.setSizePolicy(size_policy)
             self.opponent_widgets.append(opp)
             
         self.player_widget = self.create_player_widget(self.player_name)
@@ -261,7 +333,9 @@ class FiveCardPokerGameScreen(QWidget):
         layout.addLayout(table_area)
         layout.addWidget(controls_widget, alignment=Qt.AlignCenter)
         self.setLayout(layout)
-
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        
     def create_opponent_widget(self, name):
         widget = QWidget()
         vbox = QVBoxLayout()
@@ -324,12 +398,32 @@ class FiveCardPokerGameScreen(QWidget):
         except Exception:
             pass
 
+    def set_return_to_welcome_callback(self, callback):
+        self._return_to_welcome_callback = callback
+
+    def on_nav_home_clicked(self):
+        if self._game_in_progress:
+            answer = QMessageBox.question(
+                self,
+                "Abandon Game?",
+                "A game is currently in progress. Abandon this game and lose your current bet?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+        self._game_in_progress = False
+        if callable(self._return_to_welcome_callback):
+            self._return_to_welcome_callback(self)
+        else:
+            self.window().close()
+
     def update_opponents(self, num_opponents):
-        # Hide all first
         for opp in self.opponent_widgets:
             opp.hide()
         for i in range(num_opponents):
-            self.opponent_widgets[i].show()
+            if 0 <= i < len(self.opponent_widgets):
+                self.opponent_widgets[i].show()
     
     def set_bot_count(self, bot_count):
         # Fixed to 3 bots for four players total
@@ -337,6 +431,7 @@ class FiveCardPokerGameScreen(QWidget):
         self.update_opponents(bot_count)
 
     def start_game(self):
+        self._game_in_progress = True
         self._selected_indices.clear()
         self._pending_to_call = 0
         self._discard_submit_requested = False
@@ -572,6 +667,7 @@ class FiveCardPokerGameScreen(QWidget):
             self.reset_bot_cards()
             self.start_game()
         else:
+            self._game_in_progress = False
             pass
 
     def reset_bot_cards(self):
@@ -590,6 +686,8 @@ class BlackjackGameScreen(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.main_window=parent
+        self._return_to_welcome_callback = None
+        self._game_in_progress = False
         self._prompted_this_round = False
         content_layout = QVBoxLayout()
         
@@ -606,11 +704,16 @@ class BlackjackGameScreen(QWidget):
         
         # --------------------------
         # --- Horizontal top bar ---
+        self.home_button = QPushButton("Home", self)
+        self.home_button.setFixedWidth(90)
+        self.home_button.clicked.connect(self.on_nav_home_clicked)
+
         self.wallet_label = QLabel("Wallet: $1000")  # Example starting value
         self.wallet_label.setFont(QFont('Arial', 14))
         self.wallet_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         
         top_bar_layout = QHBoxLayout()
+        top_bar_layout.addWidget(self.home_button, alignment=Qt.AlignLeft)
         top_bar_layout.addStretch()
         top_bar_layout.addWidget(self.wallet_label)
 
@@ -686,6 +789,9 @@ class BlackjackGameScreen(QWidget):
         self.opponent_widgets = []
         for i in range(5):
             opp = self.create_opponent_widget(f"Bot {i+1}")
+            size_policy = opp.sizePolicy()
+            size_policy.setRetainSizeWhenHidden(True)
+            opp.setSizePolicy(size_policy)
             self.opponent_widgets.append(opp)
         
         # --- Table area with grid layout ---
@@ -782,9 +888,15 @@ class BlackjackGameScreen(QWidget):
         # buttons column itself stays top-aligned within that row.
         content_layout.addWidget(cards_and_buttons_widget, alignment=Qt.AlignCenter)
 
-        # Keep layout flexible to avoid runtime min-size tug-of-war with window sizing
-        content_layout.setSizeConstraint(QLayout.SetDefaultConstraint)
+        # Prevent squishing: enforce minimum size equal to layout's size hint
+        content_layout.setSizeConstraint(QLayout.SetMinimumSize)
         self.setLayout(content_layout)
+
+        if not BLACKJACK_DEBUG_EXPAND_WINDOW:
+            try:
+                self.setMinimumSize(self.sizeHint())
+            except Exception:
+                pass
 
         # Local override: when True, leave all bot card slots
         # visible so the initial window size clearly reflects the
@@ -813,6 +925,26 @@ class BlackjackGameScreen(QWidget):
         # Round-state flags
         self.had_push_this_round = False
         self.dealer_blackjack_round = False
+
+    def set_return_to_welcome_callback(self, callback):
+        self._return_to_welcome_callback = callback
+
+    def on_nav_home_clicked(self):
+        if self._game_in_progress:
+            answer = QMessageBox.question(
+                self,
+                "Abandon Game?",
+                "A game is currently in progress. Abandon this game and lose your current bet?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+        self._game_in_progress = False
+        if callable(self._return_to_welcome_callback):
+            self._return_to_welcome_callback(self)
+        else:
+            self.window().close()
         
     def resizeEvent(self, event):
         # Ensure the background frame always fills the PokerGameScreen
@@ -1116,17 +1248,18 @@ class BlackjackGameScreen(QWidget):
         return None
     
     def update_opponents(self, num_opponents):
-        # Hide all first
         for opp in self.opponent_widgets:
             opp.hide()
         for i in range(num_opponents):
-            self.opponent_widgets[i].show()
+            if 0 <= i < len(self.opponent_widgets):
+                self.opponent_widgets[i].show()
     
     def set_bot_count(self, bot_count):
         self.bot_count = bot_count
         self.update_opponents(bot_count)
         
     def start_game(self):
+        self._game_in_progress = True
         player_names = [self.player_name] + [f"Bot{i}" for i in range(1, self.bot_count + 1)]
         self.active_hand_index=0
         # Reset round message and flags
@@ -1540,6 +1673,7 @@ class BlackjackGameScreen(QWidget):
                 pass
             self.start_game()
         else:
+            self._game_in_progress = False
             # Remain on the Blackjack screen; do nothing further
             pass
 
@@ -1547,6 +1681,8 @@ class PokerGameScreen(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.main_window=parent
+        self._return_to_welcome_callback = None
+        self._game_in_progress = False
         layout = QVBoxLayout()
         
         self.bot_count=5
@@ -1562,11 +1698,16 @@ class PokerGameScreen(QWidget):
         
         # --------------------------
         # --- Horizontal top bar ---
+        self.home_button = QPushButton("Home", self)
+        self.home_button.setFixedWidth(90)
+        self.home_button.clicked.connect(self.on_nav_home_clicked)
+
         self.wallet_label = QLabel("Wallet: $1000")  # Example starting value
         self.wallet_label.setFont(QFont('Arial', 14))
         self.wallet_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         
         top_bar_layout = QHBoxLayout()
+        top_bar_layout.addWidget(self.home_button, alignment=Qt.AlignLeft)
         top_bar_layout.addStretch()
         top_bar_layout.addWidget(self.wallet_label)
 
@@ -1637,6 +1778,9 @@ class PokerGameScreen(QWidget):
         self.opponent_widgets = []
         for i in range(5):
             opp = self.create_opponent_widget(f"Bot {i+1}")
+            size_policy = opp.sizePolicy()
+            size_policy.setRetainSizeWhenHidden(True)
+            opp.setSizePolicy(size_policy)
             self.opponent_widgets.append(opp)
         
         # --- Table area with grid layout ---
@@ -1717,13 +1861,38 @@ class PokerGameScreen(QWidget):
         layout.addWidget(cards_and_buttons_widget, alignment=Qt.AlignCenter)
 
         
-        # Keep layout flexible to avoid runtime min-size tug-of-war with window sizing
-        layout.setSizeConstraint(QLayout.SetDefaultConstraint)
+        # Prevent squishing: enforce minimum size equal to layout's size hint
+        layout.setSizeConstraint(QLayout.SetMinimumSize)
         self.setLayout(layout)
+        try:
+            self.setMinimumSize(self.sizeHint())
+        except Exception:
+            pass
         
         self.db_helper=DBHelper()
+
+    def set_return_to_welcome_callback(self, callback):
+        self._return_to_welcome_callback = callback
+
+    def on_nav_home_clicked(self):
+        if self._game_in_progress:
+            answer = QMessageBox.question(
+                self,
+                "Abandon Game?",
+                "A game is currently in progress. Abandon this game and lose your current bet?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+        self._game_in_progress = False
+        if callable(self._return_to_welcome_callback):
+            self._return_to_welcome_callback(self)
+        else:
+            self.window().close()
         
     def start_game(self):
+        self._game_in_progress = True
         player_names = [self.player_name] + [f"Bot{i}" for i in range(1, self.bot_count + 1)]
         self.poker_game = PokerGame(player_names,
                                     action_callback=self.on_bet_requested,
@@ -1812,11 +1981,11 @@ class PokerGameScreen(QWidget):
     
 
     def update_opponents(self, num_opponents):
-        # Hide all first
         for opp in self.opponent_widgets:
             opp.hide()
         for i in range(num_opponents):
-            self.opponent_widgets[i].show()
+            if 0 <= i < len(self.opponent_widgets):
+                self.opponent_widgets[i].show()
     
     def on_phase(self, phase, data=None):
         if phase == 'initial_hands':
@@ -1866,6 +2035,7 @@ class PokerGameScreen(QWidget):
             self.reset_bot_cards()
             self.start_game()
         else:
+            self._game_in_progress = False
             pass
             
     def reset_bot_cards(self):
