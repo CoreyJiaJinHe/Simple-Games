@@ -120,7 +120,7 @@ class FiveCardPoker():
                         "max_to_discard": 3,
                     },
                 )
-                print (f"Player {player.name} wants to discard indices: {indices_to_discard}")
+                #print (f"Player {player.name} wants to discard indices: {indices_to_discard}")
                 if indices_to_discard is None:
                     self._waiting_for_discard = True
                     return

@@ -225,7 +225,16 @@ class FiveCardPokerGameScreen(QWidget):
         self._discard_submit_requested = False
 
         layout = QVBoxLayout()
-
+        
+        # --- Inner poker table (green) ---
+        self.bg_frame = QFrame(self)
+        self.bg_frame.setStyleSheet("background-color: #357a38; border-radius: 14px;")
+        self.bg_frame.setGeometry(self.rect())
+        self.bg_frame.lower()
+        # Background overlay should not drive layout sizing
+        self.bg_frame.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        self.bg_frame.show()
+        
         # Top bar
         self.home_button = QPushButton("Home")
         self.home_button.setFixedWidth(90)
@@ -334,6 +343,8 @@ class FiveCardPokerGameScreen(QWidget):
         layout.addWidget(controls_widget, alignment=Qt.AlignCenter)
         self.setLayout(layout)
     def resizeEvent(self, event):
+        
+        self.bg_frame.setGeometry(self.rect())
         super().resizeEvent(event)
         
     def create_opponent_widget(self, name):

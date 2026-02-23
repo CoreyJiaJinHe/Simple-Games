@@ -3,7 +3,7 @@ from Database_Helper import Database_Helper
 from Dealer import Dealer
 from HandEvaluators import BlackjackHandEvaluator
 from Player import BotPlayer, Player
-from utils import remove_suit, show_substituted
+from utils import remove_suit_hand, show_substituted
 class PlayerNode:
     def __init__(self, player):
         self.player = player
@@ -566,8 +566,8 @@ class BlackJack():
     def check_if_split_possible(self, hand):
         if len(hand) == 2:
             card1, card2 = hand
-            #print("DEBUG split check:", card1, remove_suit([card1]), card2, remove_suit([card2]))
-            if remove_suit([card1])[0] == remove_suit([card2])[0]:
+            #print("DEBUG split check:", card1, remove_suit_hand([card1]), card2, remove_suit_hand([card2]))
+            if remove_suit_hand([card1])[0] == remove_suit_hand([card2])[0]:
                 return True
         return False
 
