@@ -16,12 +16,15 @@ def init_deck():
     return cards
 
 def custom_sort(hand):
-    sorted_hand=[]
-    cards=init_deck()
-    for card in cards:
-        if card in hand:
-            sorted_hand.append(card)
-    return sorted_hand
+    rank_order = {value: index for index, value in enumerate(rank)}
+    suit_order = {value: index for index, value in enumerate(suit)}
+
+    def sort_key(card):
+        rank_part = card[:-1]
+        suit_part = card[-1]
+        return (rank_order.get(rank_part, -1), suit_order.get(suit_part, -1))
+
+    return sorted(hand, key=sort_key)
 
 def remove_suit_hand(hand):
     temp_hand=[]

@@ -1,8 +1,15 @@
 import sqlite3
 
 class PlayerNotFoundError(Exception):
-    pass
-    print("Player not found in database.")
+    def __init__(self, player_name=None, operation=None):
+        base_message = "Player not found in database"
+        details = []
+        if player_name is not None:
+            details.append(f"player='{player_name}'")
+        if operation is not None:
+            details.append(f"operation='{operation}'")
+        message = base_message if not details else f"{base_message} ({', '.join(details)})"
+        super().__init__(message)
 
 class gameDatabase:
     def __init__(self):
@@ -106,7 +113,7 @@ class gameDatabase:
         self.cursor.execute('SELECT * FROM players WHERE username=?', (username,))
         player=self.cursor.fetchone()
         if not player:
-            raise PlayerNotFoundError
+            raise PlayerNotFoundError(player_name=username, operation="get_player")
         return player
     
     def get_players(self):
@@ -136,7 +143,7 @@ class gameDatabase:
                         (new_wallet, new_games_played, new_games_won, new_winnings_total, username))
             self.conn.commit()
         else:
-            raise PlayerNotFoundError
+            raise PlayerNotFoundError(player_name=username, operation="update_player_stats")
     
     def update_player_wallet(self, username, amount):
         self.cursor.execute('SELECT wallet FROM players WHERE username=?', (username,))
@@ -146,7 +153,7 @@ class gameDatabase:
             self.cursor.execute('UPDATE players SET wallet=? WHERE username=?', (new_wallet, username))
             self.conn.commit()
         else:
-            raise PlayerNotFoundError
+            raise PlayerNotFoundError(player_name=username, operation="update_player_wallet")
     
     def get_leaderboard(self, limit=10):
         self.cursor.execute('''SELECT username, WINNINGS_TOTAL 

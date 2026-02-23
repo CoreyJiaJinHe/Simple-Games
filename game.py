@@ -249,24 +249,222 @@ class Poker_for_GUI():
         return river
     
     def determine_winner(self, players: list[Player], dealt):
-        winner= None
-        highest_rank=0
-        winning_hand=[]
+        # Track current best rank and all players tied with that exact winning combo
+        highest_rank = 0
+        winning_hand = []
+        winners = []
+        rank_list = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"]
+
+        def normalize_card_list(value):
+            cards = []
+
+            def collect(item):
+                if isinstance(item, str):
+                    cards.append(item)
+                elif isinstance(item, (list, tuple)):
+                    for nested_item in item:
+                        collect(nested_item)
+
+            collect(value)
+            return cards
+
+        def rank_val(card_or_rank):
+            card_rank = self.evaluator.remove_suit_card(card_or_rank)
+            return rank_list.index(card_rank)
+
         players = [p for p in players if not p.isFolded]
         for player in players:
             hand = player.hand
             rank, result, hand_name = self.evaluator.evaluate_hand(hand, dealt)
-            print(f"{player.name} has {hand_name}: {show_substituted(result)}")
+            result_cards = normalize_card_list(result)
+            print(f"{player.name} has {hand_name}: {show_substituted(result_cards)}")
+
             if rank > highest_rank:
                 highest_rank = rank
-                winner = player
                 winning_hand = result
+                winners = [player]
+                continue
+
+            if rank != highest_rank or not winners:
+                continue
+
+            winning_hand_cards = normalize_card_list(winning_hand)
+            # Precompute highest card ranks for both current winner and player
+            highest_rank_winner = self.evaluator.get_highest_rank(winning_hand_cards)
+            highest_rank_player = self.evaluator.get_highest_rank(result_cards)
+
+            if rank in [2, 3]:
+                # Check suits and check highest card in the hand to break ties.
+                # This is a simplified tie-breaking logic and may not cover all cases.
+                # Determine pair ranks for winner and player (two ranks for Two Pair)
+                def get_pair_ranks(cards):
+                    ranks = [self.evaluator.remove_suit_card(c) for c in cards]
+                    return sorted(set(ranks), key=lambda r: rank_list.index(r), reverse=True)
+
+                # Build kicker values from all available cards (hand + board),
+                # excluding the winning pair/two-pair ranks.
+                # This correctly handles shared board kickers in Texas Hold'em.
+                def get_kicker_values(player_hand, board_cards, excluded_ranks, needed):
+                    pool = list(player_hand) + list(board_cards)
+                    values = [
+                        rank_list.index(self.evaluator.remove_suit_card(c))
+                        for c in pool
+                        if self.evaluator.remove_suit_card(c) not in excluded_ranks
+                    ]
+                    values.sort(reverse=True)
+                    return values[:needed]
+
+                # Lexicographic kicker comparison (highest kicker first).
+                # Returns 1 if challenger wins, -1 if leader wins, 0 if exact tie.
+                def compare_kickers(challenger_vals, leader_vals):
+                    for challenger_val, leader_val in zip(challenger_vals, leader_vals):
+                        if challenger_val > leader_val:
+                            return 1
+                        if challenger_val < leader_val:
+                            return -1
+                    return 0
+
+                winner_pair_ranks = get_pair_ranks(winning_hand_cards)
+                player_pair_ranks = get_pair_ranks(result_cards)
+
+                # Compare highest pair first
+                if rank_list.index(player_pair_ranks[0]) > rank_list.index(winner_pair_ranks[0]):
+                    winning_hand = result
+                    winners = [player]
+                elif rank_list.index(player_pair_ranks[0]) == rank_list.index(winner_pair_ranks[0]):
+                    if len(player_pair_ranks) == 2 and len(winner_pair_ranks) == 2:
+                        # Two Pair: compare second pair
+                        if rank_list.index(player_pair_ranks[1]) > rank_list.index(winner_pair_ranks[1]):
+                            winning_hand = result
+                            winners = [player]
+                        elif rank_list.index(player_pair_ranks[1]) == rank_list.index(winner_pair_ranks[1]):
+                            # Two Pair: compare the single kicker from hand+board.
+                            leader_kicker_vals = get_kicker_values(
+                                winners[0].hand,
+                                dealt,
+                                set(winner_pair_ranks[:2]),
+                                1,
+                            )
+                            player_kicker_vals = get_kicker_values(
+                                hand,
+                                dealt,
+                                set(player_pair_ranks[:2]),
+                                1,
+                            )
+                            kicker_cmp = compare_kickers(player_kicker_vals, leader_kicker_vals)
+                            if kicker_cmp > 0:
+                                winning_hand = result
+                                winners = [player]
+                            elif kicker_cmp == 0 and player not in winners:
+                                # If the kicker is shared on the board, this remains a true tie.
+                                winners.append(player)
+                    else:
+                        # Single Pair: compare top three kickers from hand+board.
+                        leader_kicker_vals = get_kicker_values(
+                            winners[0].hand,
+                            dealt,
+                            {winner_pair_ranks[0]},
+                            3,
+                        )
+                        player_kicker_vals = get_kicker_values(
+                            hand,
+                            dealt,
+                            {player_pair_ranks[0]},
+                            3,
+                        )
+                        kicker_cmp = compare_kickers(player_kicker_vals, leader_kicker_vals)
+                        if kicker_cmp > 0:
+                            winning_hand = result
+                            winners = [player]
+                        elif kicker_cmp == 0 and player not in winners:
+                            # Equal kicker vector means exact tie (including board-kicker ties).
+                            winners.append(player)
+            elif rank == 4:
+                # Three of a kind: compare card ranks.
+                # STOP GENERATING FOR KICKERS. YOU CANT HAVE TWO PLAYERS WITH THE SAME THREE OF A KIND.
+                # THERE AREN'T ENOUGH CARDS IN THE DECK FOR THAT TO HAPPEN.
+                if highest_rank_player > highest_rank_winner:
+                    winning_hand = result
+                    winners = [player]
+            elif rank == 7:
+                # We only need to compare the ranks of the three of a kind part of the full house.
+                # The pair is unnecessary because its impossible to share three of a kinds.
+                # There are only four of each rank, thus its impossible for two players to have three of a kinds of the same rank in the same hand.
+                three_card_winner = rank_val(winning_hand[0])
+                three_card_player = rank_val(result[0])
+                if three_card_player > three_card_winner:
+                    winning_hand = result
+                    winners = [player]
+                elif three_card_player == three_card_winner and player not in winners:
+                    # Treat as tie; suits are not compared for full house
+                    winners.append(player)
+            elif rank in [5, 6, 8, 9]:
+                # For these hand ranks, compare the highest card in the hand first.
+                if highest_rank_player > highest_rank_winner:
+                    winning_hand = result
+                    winners = [player]
+                else:
+                    # If highest ranks are the same, compare next highest cards in order.
+                    # If all are equal, treat as tie (no suit comparison here).
+                    sorted_winner_hand = self.evaluator.sort_hand(winning_hand_cards)
+                    sorted_player_hand = self.evaluator.sort_hand(result_cards)
+                    decided = False
+                    for w_card, p_card in zip(reversed(sorted_winner_hand), reversed(sorted_player_hand)):
+                        p_val = rank_val(p_card)
+                        w_val = rank_val(w_card)
+                        if p_val > w_val:
+                            winning_hand = result
+                            winners = [player]
+                            decided = True
+                            break
+                        if p_val < w_val:
+                            decided = True
+                            break
+                    if not decided and highest_rank_player == highest_rank_winner and player not in winners:
+                        winners.append(player)
+            elif rank == 10:
+                # Royal flushes tie automatically
+                if player not in winners:
+                    winners.append(player)
+            else:
+                # High Card
+                if highest_rank_player > highest_rank_winner:
+                    winning_hand = result
+                    winners = [player]
+                elif highest_rank_player == highest_rank_winner:
+                    # If highest ranks are equal, compare suits of the highest card
+                    winner_high_suit = self.evaluator.get_highest_suit(winning_hand_cards)
+                    player_high_suit = self.evaluator.get_highest_suit(result_cards)
+                    suit_rank = {"H": 4, "D": 3, "C": 2, "S": 1}
+                    if suit_rank[player_high_suit] > suit_rank[winner_high_suit]:
+                        winning_hand = result
+                        winners = [player]
+
+        if not winners:
+            return
+
+        winner_names = [p.name for p in winners]
+        winning_hand_cards = normalize_card_list(winning_hand)
+        winners_display = ", ".join(winner_names)
+
         if self.phase_callback:
-            self.phase_callback("winner", [winner.name,winning_hand,self.pot])
-        print(f"The winner is {winner.name} with hand: {show_substituted(winning_hand)}")
-        self.award_player(winner, self.pot)
-        self.db_helper.log_game("Poker", ', '.join([p.name for p in players]), winner.name, self.pot)
-        self.db_helper.update_player_stats(winner.name, self.pot, True, self.pot)
+            self.phase_callback("winner", [winners_display, winning_hand_cards, self.pot])
+
+        if len(winners) > 1:
+            print(f"Tie: {winners_display} with hand: {show_substituted(winning_hand_cards)}")
+            share = self.pot // len(winners)
+            remainder = self.pot % len(winners)
+            for idx, winner in enumerate(winners):
+                award = share + (remainder if idx == 0 else 0)
+                self.award_player(winner, award)
+                self.db_helper.update_player_stats(winner.name, award, True, award)
+            self.db_helper.log_game("Poker", ', '.join([p.name for p in players]), winners_display, self.pot)
+        else:
+            winner = winners[0]
+            print(f"The winner is {winner.name} with hand: {show_substituted(winning_hand_cards)}")
+            self.award_player(winner, self.pot)
+            self.db_helper.log_game("Poker", ', '.join([p.name for p in players]), winner.name, self.pot)
+            self.db_helper.update_player_stats(winner.name, self.pot, True, self.pot)
         
 
     def award_player(self,player : Player,bet: int):

@@ -2029,16 +2029,20 @@ class PokerGameScreen(QWidget):
                 self.reveal_all_bot_hands(bot_hands)
             #self.reveal_all_bot_hands([player.hand for player in data[1:]])  # Exclude human player
         elif phase == 'winner':
-            winner_name, winning_hand, pot = data
-            self.show_game_result_prompt(winner_name, pot)
+            winner_names, winning_hand, pot = data
+            self.show_game_result_prompt(winner_names, pot)
         # Update hand type after each phase
         self.update_hand_type()
     
     
-    def show_game_result_prompt(self, winner_name, winnings):
+    def show_game_result_prompt(self, winner_names, winnings):
         msg = QMessageBox(self)
         msg.setWindowTitle("Game Over")
-        msg.setText(f"{winner_name} wins ${winnings}!\n\nPlay again?")
+        if len(winner_names) == 1:
+            winner_name = winner_names[0]
+            msg.setText(f"{winner_name} wins ${winnings}!\n\nPlay again?")
+        else:
+            msg.setText(f"Tie between {', '.join(winner_names)}! Each wins ${winnings/len(winner_names)}!\n\nPlay again?")
         msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
         msg.setDefaultButton(QMessageBox.Yes)
         result = msg.exec_()

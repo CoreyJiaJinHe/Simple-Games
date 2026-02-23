@@ -166,7 +166,8 @@ class PokerHandEvaluator():
     def get_highest_rank(self, hand):
         temp_hand = hand.copy()
         temp_hand = custom_sort(temp_hand)
-        return temp_hand[-1][:-1]
+        highest_rank_text = temp_hand[-1][:-1]
+        return rank.index(highest_rank_text)
     def get_highest_suit(self, hand):
         temp_hand = hand.copy()
         temp_hand = custom_sort(temp_hand)
