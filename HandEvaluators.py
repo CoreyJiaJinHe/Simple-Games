@@ -184,6 +184,61 @@ class PokerHandEvaluator():
         temp_hand = hand.copy()
         temp_hand = custom_sort(temp_hand)
         return temp_hand
+    
+    
+    
+    def has_potential_straight(self, hand):
+        temp_hand = hand.copy()
+        temp_hand_ranks = remove_suit_hand(temp_hand)
+        unique_ranks = set(temp_hand_ranks)
+        rank_values = [rank.index(r) for r in unique_ranks]
+        rank_values.sort()
+        # Check for any sequence of 4 or more consecutive ranks
+        for i in range(len(rank_values) - 3):
+            if rank_values[i+3] - rank_values[i] == 3:
+                return True
+        return False
+    
+    def get_potential_straight_cards(self, hand):
+        temp_hand = hand.copy()
+        temp_hand_ranks = remove_suit_hand(temp_hand)
+        unique_ranks = set(temp_hand_ranks)
+        rank_values = [rank.index(r) for r in unique_ranks]
+        rank_values.sort()
+        # Check for any sequence of 4 or more consecutive ranks
+        for i in range(len(rank_values) - 3):
+            if rank_values[i+3] - rank_values[i] == 3:
+                straight_cards = []
+                for j in range(4):
+                    rank_str = rank[rank_values[i+j]]
+                    straight_cards.extend([c for c in temp_hand if c[:-1] == rank_str])
+                return straight_cards
+        return []
+    
+    def has_potential_flush(self, hand):
+        temp_hand = hand.copy()
+        suits = ["H", "D", "C", "S"]
+        for suit in suits:
+            suited_cards = [c for c in temp_hand if c[-1] == suit]
+            if len(suited_cards) >= 4:
+                return True
+        return False
+    
+    def count_suits(self, hand):
+        temp_hand = hand.copy()
+        suit_counts = {"H": 0, "D": 0, "C": 0, "S": 0}
+        for card in temp_hand:
+            suit_counts[card[-1]] += 1
+        return suit_counts
+    
+    def get_potential_flush_cards(self, hand):
+        temp_hand = hand.copy()
+        suits = ["H", "D", "C", "S"]
+        for suit in suits:
+            suited_cards = [c for c in temp_hand if c[-1] == suit]
+            if len(suited_cards) >= 4:
+                return suited_cards
+        return []
 
 class BlackjackHandEvaluator():
     def evaluate_hand(self, hand):

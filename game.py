@@ -576,7 +576,7 @@ class Poker_for_GUI():
             else:
                 print(f"{bot_player.name} (Bot) has raised their bet by {bet}. Remaining funds: {bot_player.wallet}")
         
-    def bot_determine_maximum_bet(self, bot_player : Player, round_number=None):
+    def bot_determine_maximum_bet(self, bot_player : BotPlayer, round_number=None):
         # Assess using the bot player object, not its hand list
         bot_player.maximum_bet=int(100*self.bot_assess_risk(bot_player) + 100* self.bot_assess_hand_strength(bot_player, self.dealt))
         # Risk | Hand Strength Category         | Strength | Calc                        | max_bet

@@ -113,7 +113,7 @@ class BotPlayer(Player):
         self.game_type=game_type
         self.risk_tolerance = random.choice(["low", "medium", "high"])
         self.evaluator=None
-        #self.maximum_bet = 0
+        self.maximum_bet = 0
         if self.isBot:
             self.evaluator = HandEvaluatorFactory.get_evaluator(self.game_type)
         

@@ -1,11 +1,11 @@
 
-import random
-
 from Database_Helper import Database_Helper
 from Dealer import Dealer
 from HandEvaluators import PokerHandEvaluator
 from Player import BotPlayer, Player
 from utils import show_substituted
+
+
 
 class PlayerNode:
     def __init__(self, player):
@@ -26,7 +26,7 @@ class PlayerNode:
             self.prev.next = new_node
             self.prev = new_node
 
-class FiveCardPoker():
+class ThirteenCardPoker():
     def __init__(self, player_names, 
                  action_callback=None, #Callback to request bet from GUI
                  phase_callback=None, #Callback to notify GUI of phase changes
@@ -46,6 +46,11 @@ class FiveCardPoker():
         elif wallet <= 0:
             self.db_helper.player_take_loan(player_names[0])
         
+        if len(player_names) < 2:
+            raise ValueError("At least two players are required to play.")
+        elif len(player_names) > 4:
+            raise ValueError("A maximum of four players are supported.")
+        
         user_player = Player(player_names[0], action_callback=action_callback, wallet=wallet)
         bot_players = [BotPlayer(f"Bot{i}", game_type="Poker") for i in range(1, len(player_names))]
         self.players = [user_player] + bot_players
@@ -56,7 +61,7 @@ class FiveCardPoker():
         for i in range(n):
             self.player_nodes[i].next = self.player_nodes[(i+1)%n]
             self.player_nodes[i].prev = self.player_nodes[(i-1)%n]
-            
+        
         self.pot = 0
         self.current_bet = 0
         self.current_round_number = 0
@@ -83,115 +88,15 @@ class FiveCardPoker():
         return self.get_main_player_node().player
 
     def deal_initial_hands(self):
-        # Deal cards in a circle, one at a time, until everyone has 5 cards.
-        for _ in range(5):
+        # Deal cards in a circle, one at a time, until everyone has 13 cards.
+        #In thirteen card poker, each player has three hands: 
+        #front (3 cards), middle (5 cards), back (5 cards)
+        for _ in range(13):
             for node in self.player_nodes:
                 card = self.dealer.deal_card()
                 node.player.hand.append(card)
         if (self.phase_callback):
             self.phase_callback("update_initial_hands", {"players": self.players})
-            
-    
-            
-    def bot_discard_logic(self, player):
-        bot_hand = player.hand
-        discard_indices = []
-        rank, result, hand_name = self.evaluator.evaluate_hand(bot_hand, [])
-        if rank >= 6:  # Flush or better, keep all cards
-            return discard_indices
-        elif rank == 5:  # Straight, keep all cards
-            return discard_indices
-        elif rank in [4,3,2]:#Three of a kind, Two pair, pair, discard the non-matching cards
-            for i, card in enumerate(bot_hand):
-                if card not in result:
-                    discard_indices.append(i)
-        else:  # High card, discard all the cards unless we check for potential straight or flush draws 
-            discard_indices = [0, 1, 2, 3, 4]
-            if self.evaluator.has_potential_straight(bot_hand):
-                # If we have a potential straight, keep cards that contribute to it
-                straight_cards = self.evaluator.get_potential_straight_cards(bot_hand)
-                discard_indices = [i for i, card in enumerate(bot_hand) if card not in straight_cards]
-            elif self.evaluator.has_potential_flush(bot_hand):
-                # If we have a potential flush, keep cards of the most common suit
-                suit_counts = self.evaluator.count_suits(bot_hand)
-                most_common_suit = max(suit_counts, key=suit_counts.get)
-                discard_indices = [i for i, card in enumerate(bot_hand) if card[-1] != most_common_suit]
-        return discard_indices
-    
-    
-    
-    def discard_phase(self):
-        for node in self.player_nodes:
-            player = node.player
-
-            if player.isBot:
-                discard_indices = self.bot_discard_logic(player)
-                if discard_indices:
-                    print(f"{player.name} decides to discard {len(discard_indices)} card(s).")
-                    for index in sorted(discard_indices, reverse=True):
-                        player.discard_card(self.dealer, index)
-                    continue
-                else:
-                    print(f"{player.name} decides to keep all cards.")
-                    continue
-
-            if self.action_callback:
-                indices_to_discard = self.action_callback(
-                    "cards_to_discard_phase",
-                    {
-                        "player_name": player.name,
-                        "max_to_discard": 3,
-                    },
-                )
-                #print (f"Player {player.name} wants to discard indices: {indices_to_discard}")
-                if indices_to_discard is None:
-                    self._waiting_for_discard = True
-                    return
-                safe_indices = []
-                for idx in indices_to_discard[:3]:
-                    try:
-                        parsed_idx = int(idx)
-                    except Exception:
-                        continue
-                    if 0 <= parsed_idx < len(player.hand):
-                        safe_indices.append(parsed_idx)
-                for index in sorted(set(safe_indices), reverse=True):
-                    player.discard_card(self.dealer, index)
-            else:
-                num_to_discard = int(input(f"{player.name}, how many cards would you like to discard? (0-3): "))
-                if num_to_discard > 0:
-                    indices_to_discard = input(f"Which card indices would you like to discard? (0-{len(player.hand)-1}, separate by commas): ")
-                    indices_to_discard = [int(idx.strip()) for idx in indices_to_discard.split(",")]
-                    for index in sorted(indices_to_discard[:num_to_discard], reverse=True):
-                        player.discard_card(self.dealer, index)
-
-        self._waiting_for_discard = False
-        self.deal_new_cards()
-
-    def resume_discard_phase(self):
-        if self._waiting_for_discard:
-            self.discard_phase()
-        
-    def deal_new_cards(self):
-        #We need to loop through the players again and deal new cards to those who discarded. 
-        # We can track this by counting hand_sizes. If the player's hand is not five cards, we know they discarded and need to be dealt new cards until they have five again.
-        start_node = self.get_main_player_node()
-        current_node = start_node
-        isDone= False
-        while isDone == False:
-            if all(len(node.player.hand) == 5 for node in self.player_nodes):
-                isDone = True
-            else:
-                current_player = current_node.player
-                if len(current_player.hand) < 5:
-                    current_player.request_card(self.dealer)
-                current_node = current_node.next
-        print("All players have 5 cards again. Ending deal phase.")
-        if (self.phase_callback):
-            self.phase_callback("update_hands", {"players": self.players})
-            #self.action_callback("final_betting_round")
-            
-        self.betting_round(minimum_bet=0, round_name="final_betting_round")
     
     def get_ordered_active_nodes_after(self, raiser_node):
         result = []
@@ -202,187 +107,20 @@ class FiveCardPoker():
             node = node.next
         return result
     
-    def bot_set_bet(self, bot_player: Player, to_call, round_number):
-        #---------------------------------
-        #Cannot Continue Playing Scenarios
-        #---------------------------------
-        if bot_player.wallet <=0:
-            print(f"{bot_player.name} (Bot) has no funds left to bet. Skipping turn.")
+    def bot_set_bet(self, player, to_call, round_number):
+        if player.isFolded or player.wallet <= 0:
             return
-        if bot_player.isFolded:
-            print(f"{bot_player.name} (Bot) has already folded. Skipping turn.")
-            return
-        
-        
 
         required_to_call = max(0, int(to_call))
         if required_to_call == 0:
             return
-        #---------------------------------
-        #Starting bet
-        #---------------------------------
-        if (round_number == 1):
-            wager = min(required_to_call, bot_player.wallet)
-        #---------------------------------
-        #Subsequent bet, need to call or raise
-        #---------------------------------
-        else:
-            hand_strength=self.bot_assess_hand_strength(bot_player, self.dealt)
-            self.bot_determine_maximum_bet(bot_player, round_number=round_number)
-            #---------------------------------
-            #Check for Check Scenario
-            #---------------------------------
-            if (to_call == 0):
-                if (hand_strength<1):
-                    print (f"{bot_player.name} (Bot) decides to check.")
-                    return
-            #---------------------------------
-            #All-in Scenario
-            #---------------------------------
-            if (to_call > bot_player.wallet):
-                minimum_bet = bot_player.wallet
-                #Pair or worse, don't do it.
-                if (hand_strength<=1):
-                    bot_player.isFolded=True
-                    print(f"{bot_player.name} (Bot) decides to fold as it does not want to\n"+
-                        f"all-in on the bet of {minimum_bet}.")
-                #Three of a kind or better, go for it.
-                elif (hand_strength>1):
-                    print (f"{bot_player.name} (Bot) is going all-in with {minimum_bet}.")
-                    wager=minimum_bet
-            #---------------------------------
-            #Call/Raise Scenario
-            #---------------------------------
-            else:
-                maximum_bet = bot_player.maximum_bet
-                print(f"{bot_player.name} (Bot) has a maximum willingness to bet of {maximum_bet} based on its hand strength and risk tolerance.")
-                #If the requirement to call, is greater than the maximum_bet minus
-                #the existing current_bet (already placed bet)
-                if (minimum_bet > maximum_bet-bot_player.current_bet):
-                    #If the requirement to call is not 1.5 times more than the remaining allowable bet
-                    if (minimum_bet*1.5 <= maximum_bet-bot_player.current_bet):
-                        #Make the bet.
-                        if (hand_strength<=1):
-                            bot_player.isFolded=True
-                            print(
-                                f"{bot_player.name} (Bot) decides to fold as the minimum bet {minimum_bet}\n"
-                                f"+ existing bet of {bot_player.current_bet} exceeds its maximum willingness to bet {maximum_bet}."
-                            )
-                            return
-                        #Three of a kind or better, go for it.
-                        elif (hand_strength>1):
-                            print (f"{bot_player.name} (Bot) has called. Remaining funds: {bot_player.wallet}")
-                            wager=minimum_bet
-                    else:
-                        # Bluffing chance
-                        randomNumber=random.random()
-                        print(f"Random number for bluff decision: {randomNumber}")
-                        if (randomNumber>0.9):
-                            print(f"{bot_player.name} (Bot) thinks you are bluffing and matches your bet\n" +
-                                    f"despite the odds.")
-                            wager=minimum_bet
-                        else:
-                            print(
-                                f"{bot_player.name} (Bot) decides to fold as the minimum bet {minimum_bet}\n"
-                                f"+ existing bet of {bot_player.current_bet} exceeds its maximum willingness to bet {maximum_bet}."
-                            )
-                            bot_player.isFolded=True
-                            return
-                else:
-                    if (minimum_bet > maximum_bet):
-                        print(
-                            f"{bot_player.name} (Bot) decides to fold as the minimum bet {minimum_bet}\n"
-                            f"+ existing bet of {bot_player.current_bet} exceeds its maximum willingness to bet {maximum_bet}."
-                        )
-                        bot_player.isFolded=True
-                        return
-                    if (bot_player.risk_tolerance=="low" and bot_player.current_bet >= maximum_bet*0.5):
-                        #wager = minimum_bet
-                        pass
-                    elif (bot_player.risk_tolerance=="medium" and bot_player.current_bet >= maximum_bet*0.7):
-                        wager = random.randint(minimum_bet, int(maximum_bet*0.7))
-                    else:
-                        wager = random.randint(minimum_bet, min(maximum_bet, bot_player.wallet))
-        if (wager is not None):
-            bot_player.add_to_bet(wager)
-            if (wager == minimum_bet):
-                print (f"{bot_player.name} (Bot) has called. Remaining funds: {bot_player.wallet}")
-            else:
-                print(f"{bot_player.name} (Bot) has raised their bet by {wager}. Remaining funds: {bot_player.wallet}")
 
-        
-    def bot_determine_maximum_bet(self, bot_player : BotPlayer, round_number=None):
-        # Assess using the bot player object, not its hand list
-        bot_player.maximum_bet=int(100*self.bot_assess_risk(bot_player) + 100* self.bot_assess_hand_strength(bot_player, self.dealt))
-        # Risk | Hand Strength Category         | Strength | Calc                        | max_bet
-        # -----|-------------------------------|----------|-----------------------------|---------
-        # 0.2  | High Card                     | 0.5      | 100*0.2 + 100*0.5           | 70
-        # 0.2  | Pair or Two Pair              | 1        | 100*0.2 + 100*1             | 120
-        # 0.2  | Three of a Kind to Straight   | 1.5      | 100*0.2 + 100*1.5           | 170
-        # 0.2  | Full House or better          | 3.0      | 100*0.2 + 100*3.0           | 320
-        # 0.5  | High Card                     | 0.5      | 100*0.5 + 100*0.5           | 100
-        # 0.5  | Pair or Two Pair              | 1        | 100*0.5 + 100*1             | 150
-        # 0.5  | Three of a Kind to Straight   | 1.5      | 100*0.5 + 100*1.5           | 200
-        # 0.5  | Full House or better          | 3.0      | 100*0.5 + 100*3.0           | 350
-        # 1    | High Card                     | 0.5      | 100*1 + 100*0.5             | 150
-        # 1    | Pair or Two Pair              | 1        | 100*1 + 100*1               | 200
-        # 1    | Three of a Kind to Straight   | 1.5      | 100*1 + 100*1.5             | 250
-        # 1    | Full House or better          | 3.0      | 100*1 + 100*3.0             | 400
-    
-    def bot_assess_risk(self, bot_player : Player):
-        if bot_player.risk_tolerance == "low":
-            return 0.2
-        elif bot_player.risk_tolerance == "medium":
-            return 0.5
-        else:  # high risk tolerance
-            return 1
-    
-    
-    def bot_assess_hand_strength(self, bot_player : Player, dealt):
-        rank, result, name = self.evaluator.evaluate_hand(bot_player.hand, dealt)
-        print (f"Bot hand evaluation: Rank {rank}, Hand: {show_substituted(result)}")
-        print (f"{bot_player.name} (Bot) assesses its hand as a {name}.")
-        if rank >= 7:  # Full House or better
-            return 3.0
-        elif rank >= 4:  # Three of a Kind to Straight
-            return 1.5
-        elif rank >= 2:  # Pair to Two Pair
-            return 1
-        else:  # High Card
-            return 0.5
-    
+        wager = min(required_to_call, player.wallet)
+        player.add_to_bet(wager)
     
     def betting_round(self, minimum_bet=10, round_name="betting_round"):
-        print(f"DEBUG: Starting betting round: {round_name} with minimum bet: {minimum_bet}")
-        # Set round_number based on round_name if not already set
-        if round_name == "initial_betting_round":
-            self.current_round_number = 1
-        elif round_name == "final_betting_round":
-            self.current_round_number = 2
-
-        # Round-local bet tracking must reset each round so players act again
-        # in the final betting phase after discard/draw.
-        for node in self.player_nodes:
-            node.player.current_bet = 0
-
-        # Initialize betting state
-        self._betting_current_bet = minimum_bet
-        
-        self._betting_need_to_act = [node for node in self.player_nodes if not node.player.isFolded and node.player.wallet > 0]
-        self._betting_done_callback = None
-        
-        def done_callback():
-            self.pot = sum(node.player.bet for node in self.player_nodes)
-            print(f"Total pot is now: {self.pot}\n")
-            if self.pot_update_callback:
-                self.pot_update_callback(self.pot)
-            if self.current_round_number == 1:
-                self.discard_phase()
-            elif self.current_round_number == 2:
-                self.showdown()
-        self._betting_done_callback = done_callback
-        self.betting_run()
-
+        pass
+    
     def betting_run(self):
         # Iterative version of betting flow to avoid recursive stack frames
         while True:
@@ -676,14 +414,10 @@ class FiveCardPoker():
     def start_game(self):
         # self.debug_start_game()
         # return
-        
-        #Five Card Poker.
-        #Get initial buy in bets.
-        #Deal cards in a circle, one at a time, until everyone has 5 cards.
-        
-        self.deal_initial_hands()
-        self.show_only_player_hand()
-        self.betting_round(minimum_bet=self.minimum_bet, round_name="initial_betting_round")
+        pass
+    
+    
+        #For thirteen card poker, we deal thirteen cards at the beginning.
         
     def show_hands(self):
         for player in self.players:
@@ -696,12 +430,24 @@ class FiveCardPoker():
         #return main_player.hand
 
 if "__main__" == __name__:
-    game = FiveCardPoker(player_names=["You", "Bot1", "Bot2"])
+    game = ThirteenCardPoker(player_names=["You", "Bot1", "Bot2"])
 #     game.set_debug_hands({
 #     "You": ["AH","KH","QH","JH","10H"],
 #     "Bot1": ["9C","9D","9S","2H","3D"],
 #     "Bot2": ["AS","AD","AC","KS","QD"],
 # })
     game.start_game()
+
+
+
+
+
+
+
+
+
+
+
+
 
 

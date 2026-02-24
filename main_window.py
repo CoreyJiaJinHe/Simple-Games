@@ -2205,6 +2205,28 @@ class WelcomeScreen(QWidget):
         self.blackjack_callback = blackjack_callback
         self.five_card_poker_callback = five_card_poker_callback
         
+        instructions = [
+            "Use the buttons below to select a game.",
+            "In-game controls:",
+            "- Click cards to select/deselect them.",
+            "- Use action buttons to perform game actions.",
+            "- Follow on-screen prompts for game flow."
+        ]
+        
+        instructions_widget = QWidget()
+        instructions_layout = QVBoxLayout()
+        instructions_layout.setAlignment(Qt.AlignCenter)
+        instructions_layout.setSpacing(4)
+        instructions_widget.setLayout(instructions_layout)
+        for instr in instructions:
+            label = QLabel(instr)
+            label.setFont(QFont("Arial", 12))
+            label.setAlignment(Qt.AlignLeft)
+            label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+            label.setMinimumHeight(label.fontMetrics().height() + 4)
+            label.setContentsMargins(0, 1, 0, 1)
+            instructions_layout.addWidget(label)
+            
         games_widget= QWidget()
         games_layout = QHBoxLayout()
         games_layout.addWidget(startPokerButton)
@@ -2212,8 +2234,11 @@ class WelcomeScreen(QWidget):
         games_layout.addWidget(startFiveCardButton)
         games_widget.setLayout(games_layout)
         
+        
+        
         layout.addWidget(titleLabel, alignment=Qt.AlignCenter)
         layout.addWidget(user_widget, alignment=Qt.AlignCenter)
+        layout.addWidget(instructions_widget, alignment=Qt.AlignCenter)
         layout.addWidget(games_widget, alignment=Qt.AlignCenter)
         self.setLayout(layout)
         
