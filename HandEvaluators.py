@@ -1,7 +1,41 @@
 
-from utils import remove_suit_hand, custom_sort, rank
+from utils import remove_suit_hand, custom_sort, rank, suit
 
 class PokerHandEvaluator():
+    def _flatten_cards(self, value):
+        cards = []
+
+        def collect(item):
+            if isinstance(item, str):
+                cards.append(item)
+            elif isinstance(item, (list, tuple)):
+                for nested in item:
+                    collect(nested)
+
+        collect(value)
+        return cards
+
+    def _rank_text(self, token):
+        card = str(token or "").strip()
+        if not card:
+            return ""
+        if len(card) >= 2 and card[-1] in suit:
+            return card[:-1]
+        return card
+
+    def _suit_text(self, token):
+        card = str(token or "").strip()
+        if len(card) >= 2 and card[-1] in suit:
+            return card[-1]
+        return ""
+
+    def _best_card_for_rank(self, cards, target_rank):
+        suited_cards = [c for c in cards if self._rank_text(c) == target_rank and self._suit_text(c)]
+        if not suited_cards:
+            return ""
+        suit_rank = {"H": 4, "D": 3, "C": 2, "S": 1}
+        return max(suited_cards, key=lambda c: suit_rank.get(self._suit_text(c), 0))
+
     def evaluate_hand(self, hand, dealt):
         checks = [
                 (self.check_royal_flush, 10, "Royal Flush"),
@@ -50,11 +84,19 @@ class PokerHandEvaluator():
     
     def check_straight(self, hand, dealt):
         combined = hand.copy() + dealt.copy()
-        ranks_only = [c[:-1] for c in combined]
+        ranks_only = [self._rank_text(c) for c in combined]
         found, straight_ranks = self._find_straight_ranks(ranks_only)
-        if found:
-            return True, straight_ranks
-        return False, []
+        if not found:
+            return False, []
+
+        straight_cards = []
+        for straight_rank in straight_ranks:
+            card = self._best_card_for_rank(combined, straight_rank)
+            if not card:
+                return False, []
+            straight_cards.append(card)
+
+        return True, straight_cards
 
     def _find_straight_ranks(self, ranks):
         """Return (True, [r1..r5]) for highest straight found in ranks.
@@ -110,7 +152,6 @@ class PokerHandEvaluator():
         return False, []
     
     def check_single_pair(self,hand,dealt):
-        
         temp_hand=hand.copy() + dealt.copy()
         temp_hand_ranks=remove_suit_hand(temp_hand)
         for card_rank in rank:
@@ -138,9 +179,11 @@ class PokerHandEvaluator():
     def check_full_house(self,hand,dealt):
         threeCheck, threeCard=self.check_three_of_a_kind(hand, dealt)
         pairCheck, pairCards=self.check_single_pair(hand, dealt)
-        if (threeCheck and pairCheck):
-            if (threeCard not in pairCards):
-                return True, (threeCard, pairCards)
+        if (threeCheck and pairCheck and threeCard and pairCards):
+            three_rank = self._rank_text(threeCard[0])
+            pair_rank = self._rank_text(pairCards[0])
+            if three_rank != pair_rank:
+                return True, threeCard + pairCards
         return False, []
 
     def check_flush(self,hand,dealt):
@@ -161,11 +204,11 @@ class PokerHandEvaluator():
         return temp_hand[-1]
     
     def remove_suit_card(self, card):
-        return card[:-1]
+        return self._rank_text(card)
     
     def get_highest_rank(self, hand):
-        temp_hand = hand.copy()
-        temp_hand = custom_sort(temp_hand)
+        cards = self._flatten_cards(hand.copy())
+        temp_hand = custom_sort(cards)
         highest_rank_text = temp_hand[-1][:-1]
         return rank.index(highest_rank_text)
     def get_highest_suit(self, hand):

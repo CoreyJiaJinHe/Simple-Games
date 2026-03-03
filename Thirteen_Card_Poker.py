@@ -80,6 +80,7 @@ class ThirteenCardPoker():
         self._betting_current_bet = None
         self._betting_done_callback = None
         self._waiting_for_discard = False
+        self._waiting_for_user_split = False
         self.rank_list = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"]
 
         # Debug/testing override:
@@ -94,16 +95,18 @@ class ThirteenCardPoker():
         # Helper to retrieve the non-bot (human) player
         return self.get_main_player_node().player
 
-    def deal_initial_hands(self):
+    def deal_initial_hands(self, emit_phase=True, bot_reveal_mode="none"):
         # Deal cards in a circle, one at a time, until everyone has 13 cards.
         #In thirteen card poker, each player has three hands: 
         #front (3 cards), middle (5 cards), back (5 cards)
+        for node in self.player_nodes:
+            node.player.hand = []
         for _ in range(13):
             for node in self.player_nodes:
                 card = self.dealer.deal_card()
                 node.player.hand.append(card)
-        if (self.phase_callback):
-            self.phase_callback("update_initial_hands", {"players": self.players})
+        if emit_phase and self.phase_callback:
+            self.phase_callback("update_initial_hands", {"players": self.players, "reveal_bots": bot_reveal_mode})
 
     def rank_value(self, card):
         return self.rank_list.index(card[:-1])
@@ -341,6 +344,54 @@ class ThirteenCardPoker():
                 mode = "user manual"
         return split, mode
 
+    def configure_bot_splits_only(self):
+        for player in self.players:
+            if player.isBot:
+                split = self.auto_arrange_player_hand(player)
+                player.front_hand = split["front"]
+                player.middle_hand = split["middle"]
+                player.back_hand = split["back"]
+
+    def submit_user_split(self, front_hand, middle_hand, back_hand):
+        player = self.get_main_player()
+        source_hand = list(player.hand)
+        front = list(front_hand)
+        middle = list(middle_hand)
+        back = list(back_hand)
+
+        is_valid, message = self.validate_3_5_5_split(
+            source_hand,
+            front,
+            middle,
+            back,
+            enforce_strength_order=False,
+        )
+        if not is_valid:
+            raise ValueError(message)
+
+        player.front_hand = front
+        player.middle_hand = middle
+        player.back_hand = back
+        return {"front": front, "middle": middle, "back": back}
+
+    def resume_after_user_split(self):
+        if not self._waiting_for_user_split:
+            return
+        player = self.get_main_player()
+        has_split = (
+            hasattr(player, "front_hand")
+            and hasattr(player, "middle_hand")
+            and hasattr(player, "back_hand")
+            and len(getattr(player, "front_hand", [])) == 3
+            and len(getattr(player, "middle_hand", [])) == 5
+            and len(getattr(player, "back_hand", [])) == 5
+        )
+        if not has_split:
+            raise ValueError("User split is not ready. Front/Middle/Back must be 3/5/5 cards.")
+
+        self._waiting_for_user_split = False
+        self.betting_round(minimum_bet=self.minimum_bet, round_name="final_betting_round")
+
     def configure_player_splits(self, print_output=False):
         if print_output:
             print("\n--- Configured 3-5-5 hands ---")
@@ -417,7 +468,7 @@ class ThirteenCardPoker():
             node = node.next
         return result
     
-    def bot_set_bet(self, player, to_call, round_number):
+    def bot_set_bet(self, player: BotPlayer, to_call, round_number):
         if player.isFolded or player.wallet <= 0:
             return
 
@@ -433,8 +484,16 @@ class ThirteenCardPoker():
         # 1) Deal 13 cards
         # 2) Configure 3-5-5 lane hands
         # 3) Run final betting round, which leads to showdown -> determine_winner_by_lanes
-        self.deal_initial_hands()
-        print_output = not bool(self.action_callback)
+        if self.action_callback:
+            self.deal_initial_hands(emit_phase=False)
+            self.configure_bot_splits_only()
+            if self.phase_callback:
+                self.phase_callback("update_initial_hands", {"players": self.players, "reveal_bots": "none"})
+            self._waiting_for_user_split = True
+            return
+
+        self.deal_initial_hands(emit_phase=False)
+        print_output = True
         self.configure_player_splits(print_output=print_output)
         self.betting_round(minimum_bet=self.minimum_bet, round_name="final_betting_round")
     
@@ -466,7 +525,6 @@ class ThirteenCardPoker():
                 self.showdown()
         self._betting_done_callback = done_callback
         self.betting_run()
-        pass
     
     def betting_run(self):
         # Iterative version of betting flow to avoid recursive stack frames
@@ -545,6 +603,8 @@ class ThirteenCardPoker():
             # If no raise and player acted, continue to next in queue
     
     def showdown(self):
+        if self.phase_callback:
+            self.phase_callback("update_hands", {"players": self.players, "reveal_bots": "all"})
         print(f"The final pot total is: {self.pot}\n")
         self.show_hands()
         self.determine_winner_by_lanes()
@@ -767,7 +827,12 @@ class ThirteenCardPoker():
             lane_winners.append(back_resolution["winners"][0])
 
         if len(lane_winners) == 3 and len({winner.name for winner in lane_winners}) == 3:
-            winners = players
+            winners = []
+            seen_names = set()
+            for lane_winner in lane_winners:
+                if lane_winner.name not in seen_names:
+                    winners.append(lane_winner)
+                    seen_names.add(lane_winner.name)
         else:
             lane_win_counts = Counter(winner.name for winner in lane_winners)
             if not lane_win_counts:
