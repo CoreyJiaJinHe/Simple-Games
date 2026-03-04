@@ -2230,6 +2230,7 @@ class ThirteenCardPokerGameScreen(QWidget):
         self.engine = None
         self._selected_indices = set()
         self._pending_to_call = 0
+        self._finalize_enabled = False
         
         
         
@@ -2336,10 +2337,11 @@ class ThirteenCardPokerGameScreen(QWidget):
         controls_layout.addWidget(bet_row_widget, alignment=Qt.AlignCenter)
         controls_layout.addSpacing(8)
         
-        finalize_hands=QPushButton("Finalize Hand Selection")
-        finalize_hands.setFixedWidth(180)
-        finalize_hands.clicked.connect(self.finalize_hand_selection)
-        controls_layout.addWidget(finalize_hands, alignment=Qt.AlignCenter)
+        self.finalize_hands_button = QPushButton("Finalize Hand Selection")
+        self.finalize_hands_button.setFixedWidth(180)
+        self.finalize_hands_button.clicked.connect(self.finalize_hand_selection)
+        self.finalize_hands_button.setDisabled(True)
+        controls_layout.addWidget(self.finalize_hands_button, alignment=Qt.AlignCenter)
         
         self.bet_error_label = QLabel("")
         self.bet_error_label.setStyleSheet("color: red;")
@@ -2350,6 +2352,76 @@ class ThirteenCardPokerGameScreen(QWidget):
         layout.addLayout(table_area)
         layout.addWidget(controls_widget, alignment=Qt.AlignCenter)
         self.setLayout(layout)
+
+    def _set_finalize_enabled(self, enabled: bool):
+        self._finalize_enabled = bool(enabled)
+        try:
+            self.finalize_hands_button.setEnabled(self._finalize_enabled)
+        except Exception:
+            pass
+
+    def _sync_player_bet_label(self):
+        try:
+            if not self.engine or not getattr(self.engine, "players", None):
+                self.player_widget.bet_label.setText("Bet: 0")
+                return
+            player = self.engine.players[0]
+            amount = int(getattr(player, "current_bet", 0) or 0)
+            self.player_widget.bet_label.setText(f"Bet: {amount}")
+        except Exception:
+            pass
+
+    def _reset_round_ui(self):
+        # New round should start with face-down cards until after the initial bet.
+        self._selected_indices.clear()
+        self._pending_to_call = 0
+        self._pending_swap_index = None
+        self._player_hand_cards = []
+        self._finalized_split = None
+        self._bot_reveal_mode = "none"
+        self.bet_error_label.setText("")
+        self.bet_input.setText("")
+        self.bet_button.setEnabled(False)
+        self._set_finalize_enabled(False)
+
+        try:
+            self.pot_label.setText("Pot: 0")
+        except Exception:
+            pass
+
+        try:
+            self.player_widget.bet_label.setText("Bet: 0")
+        except Exception:
+            pass
+        for bot_widget in getattr(self, "opponent_widgets", []):
+            try:
+                bot_widget.bet_label.setText("Bet: 0")
+            except Exception:
+                pass
+
+        back_path = "cards_graphic/card_back.png"
+        # Player cards
+        for lbl in getattr(self.player_widget, "card_labels", []):
+            try:
+                pix = QPixmap(back_path).scaled(lbl.width(), lbl.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                lbl.setPixmap(pix)
+                if isinstance(lbl, ThirteenCardPokerGameScreen.ClickableLabel):
+                    lbl.selected = False
+                    lbl.update_selection_style()
+            except Exception:
+                pass
+        self._update_row_name_labels(self.player_widget, [], reveal_names=False)
+
+        # Bot cards
+        for bot_widget in getattr(self, "opponent_widgets", []):
+            for lbl in getattr(bot_widget, "card_labels", []):
+                try:
+                    pix = QPixmap(back_path).scaled(lbl.width(), lbl.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    lbl.setPixmap(pix)
+                except Exception:
+                    pass
+            self._update_row_name_labels(bot_widget, [], reveal_names=False)
+    
     def resizeEvent(self, event):
         self.bg_frame.setGeometry(self.rect())
         super().resizeEvent(event)
@@ -2523,15 +2595,8 @@ class ThirteenCardPokerGameScreen(QWidget):
 
     def start_game(self):
         self._game_in_progress = True
-        self._selected_indices.clear()
-        self._pending_to_call = 0
-        self._pending_swap_index = None
-        self._player_hand_cards = []
-        self._finalized_split = None
-        self._bot_reveal_mode = "none"
-        self.bet_error_label.setText("")
-        self.bet_input.setText("")
-        self.bet_button.setEnabled(False)
+        # Reset UI immediately so a new round starts face-down.
+        self._reset_round_ui()
         player_names = [self.player_name] + [f"Bot{i}" for i in range(1, self.bot_count + 1)]
         # Pad/trim bot names to 3
         bot_names = (player_names[1:4])
@@ -2602,6 +2667,8 @@ class ThirteenCardPokerGameScreen(QWidget):
         print(f"[DEBUG][TCP] swapped cards at indices {first_idx} and {idx}")
         
     def finalize_hand_selection(self):
+        if not getattr(self, "_finalize_enabled", False):
+            return
         if len(self._player_hand_cards) < 13:
             QMessageBox.warning(self, "Cannot Finalize", "Player hand is incomplete.")
             return
@@ -2634,8 +2701,9 @@ class ThirteenCardPokerGameScreen(QWidget):
             "back_hand": back,
         }
         self._clear_player_selection()
+        self._set_finalize_enabled(False)
         self.game_phase_label.setText("Phase: Hand layout finalized. Starting final betting round...")
-        print(f"[DEBUG][TCP] finalized split: {self._finalized_split}")
+        #print(f"[DEBUG][TCP] finalized split: {self._finalized_split}")
 
         try:
             if self.engine is not None and hasattr(self.engine, "resume_after_user_split"):
@@ -2663,37 +2731,37 @@ class ThirteenCardPokerGameScreen(QWidget):
             wid.bet_label.setText("Folded")
             # Reveal first two cards for flavor
             for i, card in enumerate(hand[:2]):
-                pix = QPixmap(f"cards_graphic/{card}.png").scaled(80, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                wid.card_labels[i].setPixmap(pix)
+                lbl = wid.card_labels[i]
+                pix = QPixmap(f"cards_graphic/{card}.png").scaled(lbl.width(), lbl.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                lbl.setPixmap(pix)
         except Exception:
             pass
 
     def on_phase(self, phase, data=None):
         data = data or {}
         print(f"Phase update: {phase}, data: {data}")
+        self._sync_player_bet_label()
 
         # Update game_phase label and hands based on phase
         self.game_phase_label.setText(f"Phase: {phase}")
-
         if phase == "update_initial_hands":
             players = data.get("players", [])
             self._bot_reveal_mode = data.get("reveal_bots", "none")
             self.render_all_hands(players)
             self.bet_button.setEnabled(False)
+            self._set_finalize_enabled(True)
             self.game_phase_label.setText("Phase: Arrange your cards, then click Finalize Hand Selection.")
-
         elif phase == "update_hands":
             players = data.get("players", [])
             self._bot_reveal_mode = data.get("reveal_bots", "all")
             self.render_all_hands(players)
             self.bet_button.setEnabled(False)
-        
-        
-        
+            self._set_finalize_enabled(False)
         elif phase == "winner":
             winner_names = data.get("winner_names", [])
             pot = data.get("pot", 0)
             self.bet_button.setEnabled(False)
+            self._set_finalize_enabled(False)
             if winner_names:
                 self.show_game_result_prompt(winner_names, pot)
 
@@ -2764,6 +2832,7 @@ class ThirteenCardPokerGameScreen(QWidget):
             self.bet_input.setText(str(self._pending_to_call))
             self.bet_error_label.setText("")
             self.bet_button.setEnabled(True)
+            self._set_finalize_enabled(False)
             if round_number == 1:
                 self.game_phase_label.setText(
                     f"Phase: First betting round. Minimum required now: {to_call}."
@@ -2788,8 +2857,11 @@ class ThirteenCardPokerGameScreen(QWidget):
             self.bet_error_label.setText("Please enter a valid number.")
             return
         
-        if amount < minimum_bet:
-            self.bet_error_label.setText(f"Bet must be at least {minimum_bet}.")
+        # Use the engine-provided to-call amount when available.
+        required_min = int(getattr(self, "_pending_to_call", 0) or 0)
+        required_min = max(int(minimum_bet), required_min)
+        if amount < required_min:
+            self.bet_error_label.setText(f"Bet must be at least {required_min}.")
             return
         if amount > player.wallet:
             self.bet_error_label.setText("You do not have enough funds.")
@@ -2801,6 +2873,7 @@ class ThirteenCardPokerGameScreen(QWidget):
         # Adjust bet via add_bet
         self.bet_error_label.setText("")
         player.add_to_bet(amount)
+        self._sync_player_bet_label()
         self._pending_to_call = 0
         self.bet_button.setEnabled(False)
         #self.disable_betting_buttons()
@@ -2829,21 +2902,14 @@ class ThirteenCardPokerGameScreen(QWidget):
         msg.setDefaultButton(QMessageBox.Yes)
         result = msg.exec_()
         if result == QMessageBox.Yes:
-            self.reset_bot_cards()
             self.start_game()
         else:
             self._game_in_progress = False
             pass
 
-    def reset_bot_cards(self):
-        for bot_widget in self.opponent_widgets:
-            for card_label in getattr(bot_widget, 'card_labels', []):
-                card_label.setPixmap(
-                    QPixmap("cards_graphic/card_back.png").scaled(
-                        80, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation
-                    )
-                )
-            bot_widget.bet_label.setText("Bet: 0")
+    # def reset_bot_cards(self):
+    #     # Kept for backward compatibility; this screen needs to reset both bots and player.
+    #     self._reset_round_ui()
 
 
     
