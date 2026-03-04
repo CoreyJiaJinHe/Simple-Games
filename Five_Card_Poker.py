@@ -216,6 +216,7 @@ class FiveCardPoker():
         
 
         required_to_call = max(0, int(to_call))
+        wager = None
         if required_to_call == 0:
             return
         #---------------------------------
@@ -240,39 +241,40 @@ class FiveCardPoker():
             #All-in Scenario
             #---------------------------------
             if (to_call > bot_player.wallet):
-                minimum_bet = bot_player.wallet
+                all_in_amount = bot_player.wallet
                 #Pair or worse, don't do it.
                 if (hand_strength<=1):
                     bot_player.isFolded=True
                     print(f"{bot_player.name} (Bot) decides to fold as it does not want to\n"+
-                        f"all-in on the bet of {minimum_bet}.")
+                        f"all-in on the bet of {all_in_amount}.")
                 #Three of a kind or better, go for it.
                 elif (hand_strength>1):
-                    print (f"{bot_player.name} (Bot) is going all-in with {minimum_bet}.")
-                    wager=minimum_bet
+                    print (f"{bot_player.name} (Bot) is going all-in with {all_in_amount}.")
+                    wager=all_in_amount
             #---------------------------------
             #Call/Raise Scenario
             #---------------------------------
             else:
                 maximum_bet = bot_player.maximum_bet
+                remaining_allowable = max(0, maximum_bet - bot_player.current_bet)
                 print(f"{bot_player.name} (Bot) has a maximum willingness to bet of {maximum_bet} based on its hand strength and risk tolerance.")
                 #If the requirement to call, is greater than the maximum_bet minus
                 #the existing current_bet (already placed bet)
-                if (minimum_bet > maximum_bet-bot_player.current_bet):
+                if (required_to_call > remaining_allowable):
                     #If the requirement to call is not 1.5 times more than the remaining allowable bet
-                    if (minimum_bet*1.5 <= maximum_bet-bot_player.current_bet):
+                    if (required_to_call <= remaining_allowable * 1.5):
                         #Make the bet.
                         if (hand_strength<=1):
                             bot_player.isFolded=True
                             print(
-                                f"{bot_player.name} (Bot) decides to fold as the minimum bet {minimum_bet}\n"
+                                f"{bot_player.name} (Bot) decides to fold as the required to call {required_to_call}\n"
                                 f"+ existing bet of {bot_player.current_bet} exceeds its maximum willingness to bet {maximum_bet}."
                             )
                             return
                         #Three of a kind or better, go for it.
                         elif (hand_strength>1):
                             print (f"{bot_player.name} (Bot) has called. Remaining funds: {bot_player.wallet}")
-                            wager=minimum_bet
+                            wager=required_to_call
                     else:
                         # Bluffing chance
                         randomNumber=random.random()
@@ -280,32 +282,36 @@ class FiveCardPoker():
                         if (randomNumber>0.9):
                             print(f"{bot_player.name} (Bot) thinks you are bluffing and matches your bet\n" +
                                     f"despite the odds.")
-                            wager=minimum_bet
+                            wager=required_to_call
                         else:
                             print(
-                                f"{bot_player.name} (Bot) decides to fold as the minimum bet {minimum_bet}\n"
+                                f"{bot_player.name} (Bot) decides to fold as the required to call {required_to_call}\n"
                                 f"+ existing bet of {bot_player.current_bet} exceeds its maximum willingness to bet {maximum_bet}."
                             )
                             bot_player.isFolded=True
                             return
                 else:
-                    if (minimum_bet > maximum_bet):
+                    if (required_to_call > maximum_bet):
                         print(
-                            f"{bot_player.name} (Bot) decides to fold as the minimum bet {minimum_bet}\n"
+                            f"{bot_player.name} (Bot) decides to fold as the required to call {required_to_call}\n"
                             f"+ existing bet of {bot_player.current_bet} exceeds its maximum willingness to bet {maximum_bet}."
                         )
                         bot_player.isFolded=True
                         return
                     if (bot_player.risk_tolerance=="low" and bot_player.current_bet >= maximum_bet*0.5):
-                        #wager = minimum_bet
-                        pass
+                        wager = required_to_call
                     elif (bot_player.risk_tolerance=="medium" and bot_player.current_bet >= maximum_bet*0.7):
-                        wager = random.randint(minimum_bet, int(maximum_bet*0.7))
+                        print(f"{bot_player.name} (Bot) is getting cautious as it approaches its maximum willingness to bet.")
+                        upper_bound = min(bot_player.wallet, max(required_to_call, int(maximum_bet*0.7)))
+                        wager = random.randint(required_to_call, upper_bound)
                     else:
-                        wager = random.randint(minimum_bet, min(maximum_bet, bot_player.wallet))
+                        print(f"{bot_player.name} (Bot) is willing to bet up to its maximum willingness to bet of {maximum_bet}.")
+                        upper_bound = min(maximum_bet, bot_player.wallet)
+                        upper_bound = max(required_to_call, upper_bound)
+                        wager = random.randint(required_to_call, upper_bound)
         if (wager is not None):
             bot_player.add_to_bet(wager)
-            if (wager == minimum_bet):
+            if (wager == required_to_call):
                 print (f"{bot_player.name} (Bot) has called. Remaining funds: {bot_player.wallet}")
             else:
                 print(f"{bot_player.name} (Bot) has raised their bet by {wager}. Remaining funds: {bot_player.wallet}")
