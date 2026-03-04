@@ -8,7 +8,27 @@ from game import Poker_for_GUI as PokerGame
 from Five_Card_Poker import FiveCardPoker
 from blackjack import BlackJack as BlackjackGame
 from game import Database_Helper as DBHelper
+from chips_visual import ChipsVisualWidget
 BLACKJACK_DEBUG_EXPAND_WINDOW = False
+
+
+def _normalize_winner_names(winner_names):
+    if winner_names is None:
+        return []
+    if isinstance(winner_names, str):
+        text = winner_names.strip()
+        return [text] if text else []
+    if isinstance(winner_names, (list, tuple, set)):
+        normalized = []
+        for winner in winner_names:
+            if winner is None:
+                continue
+            text = str(winner).strip()
+            if text:
+                normalized.append(text)
+        return normalized
+    text = str(winner_names).strip()
+    return [text] if text else []
 
 
 class GameHostWindow(QWidget):
@@ -304,9 +324,8 @@ class FiveCardPokerGameScreen(QWidget):
         self.pot_label = QLabel("Pot: 0")
         self.pot_label.setFont(QFont('Arial', 14))
         self.pot_label.setAlignment(Qt.AlignCenter)
-        self.chips_widget = QLabel("CHIPS PLACEHOLDER")
-        self.chips_widget.setMinimumSize(200, 40)
-        self.chips_widget.setStyleSheet("background: #bbb; border: 2px solid #888; border-radius: 8px;")
+        self.chips_widget = ChipsVisualWidget(self)
+        self.chips_widget.setMinimumSize(220, 90)
 
         center_col_layout.addWidget(self.pot_label, alignment=Qt.AlignCenter)
         center_col_layout.addSpacing(8)
@@ -514,6 +533,10 @@ class FiveCardPokerGameScreen(QWidget):
 
     def update_pot(self, amount):
         self.pot_label.setText(f"Pot: {amount}")
+        try:
+            self.chips_widget.set_amount(amount)
+        except Exception:
+            pass
 
     def update_bot_bet(self, bot_index, amount):
         # bot_index: 0 for Bot1, 1 for Bot2, 2 for Bot3
@@ -558,9 +581,9 @@ class FiveCardPokerGameScreen(QWidget):
             pot = data.get("pot", 0)
             self.bet_button.setEnabled(False)
             self.discard_button.setEnabled(False)
-            if winner_names:
-                winners_text = ", ".join(winner_names)
-                self.show_game_result_prompt(winners_text, pot)
+            normalized_winners = _normalize_winner_names(winner_names)
+            if normalized_winners:
+                self.show_game_result_prompt(normalized_winners, pot)
 
     def render_all_hands(self, players):
         # Map players to widgets: assume names order [You, Bot1, Bot2, Bot3]
@@ -691,10 +714,20 @@ class FiveCardPokerGameScreen(QWidget):
         except Exception:
             pass
 
-    def show_game_result_prompt(self, winner_name, winnings):
+    def show_game_result_prompt(self, winner_names, winnings):
         msg = QMessageBox(self)
         msg.setWindowTitle("Game Over")
-        msg.setText(f"{winner_name} wins ${winnings}!\n\nPlay again?")
+        normalized_winners = _normalize_winner_names(winner_names)
+        if len(normalized_winners) > 1:
+            split_amount = winnings // len(normalized_winners)
+            msg.setText(
+                f"Tie between {', '.join(normalized_winners)}.\n"
+                f"Pot is split: ${split_amount} each.\n\n"
+                f"Play again?"
+            )
+        else:
+            winner_name = normalized_winners[0] if normalized_winners else "Winner"
+            msg.setText(f"{winner_name} wins ${winnings}!\n\nPlay again?")
         msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
         msg.setDefaultButton(QMessageBox.Yes)
         result = msg.exec_()
@@ -864,9 +897,8 @@ class BlackjackGameScreen(QWidget):
         # --- Center column: stack table cards, pot label, chips widget ---
         center_col_layout = QVBoxLayout()
         center_col_layout.setAlignment(Qt.AlignCenter)
-        self.chips_widget = QLabel("CHIPS PLACEHOLDER")
-        self.chips_widget.setMinimumSize(200, 40)
-        self.chips_widget.setStyleSheet("background: #bbb; border: 2px solid #888; border-radius: 8px;")
+        self.chips_widget = ChipsVisualWidget(self)
+        self.chips_widget.setMinimumSize(220, 90)
         
         # Center column layout
         center_col_layout.addSpacing(32)
@@ -1675,6 +1707,10 @@ class BlackjackGameScreen(QWidget):
     
     def update_pot(self, amount):
         self.pot_label.setText(f"Pot: {amount}")
+        try:
+            self.chips_widget.set_amount(amount)
+        except Exception:
+            pass
     
     def update_bot_bet(self, bot_index, amount):
         # bot_index: 0 for Bot1, 1 for Bot2, etc.
@@ -1860,9 +1896,8 @@ class PokerGameScreen(QWidget):
         self.pot_label = QLabel("Pot: 0")
         self.pot_label.setFont(QFont('Arial',14))
         self.pot_label.setAlignment(Qt.AlignCenter)
-        self.chips_widget = QLabel("CHIPS PLACEHOLDER")
-        self.chips_widget.setMinimumSize(200, 40)
-        self.chips_widget.setStyleSheet("background: #bbb; border: 2px solid #888; border-radius: 8px;")
+        self.chips_widget = ChipsVisualWidget(self)
+        self.chips_widget.setMinimumSize(220, 40)
         
         # Center column layout
         center_col_layout.addSpacing(32)
@@ -2001,6 +2036,10 @@ class PokerGameScreen(QWidget):
 
     def update_pot(self, amount):
         self.pot_label.setText(f"Pot: {amount}")
+        try:
+            self.chips_widget.set_amount(amount)
+        except Exception:
+            pass
 
     def update_bot_bet(self, bot_index, amount):
         # bot_index: 0 for Bot1, 1 for Bot2, etc.
@@ -2054,6 +2093,7 @@ class PokerGameScreen(QWidget):
             #self.reveal_all_bot_hands([player.hand for player in data[1:]])  # Exclude human player
         elif phase == 'winner':
             winner_names, winning_hand, pot = data
+            print(f"DEBUG: Winner phase data: {data}")
             self.show_game_result_prompt(winner_names, pot)
         # Update hand type after each phase
         self.update_hand_type()
@@ -2062,11 +2102,16 @@ class PokerGameScreen(QWidget):
     def show_game_result_prompt(self, winner_names, winnings):
         msg = QMessageBox(self)
         msg.setWindowTitle("Game Over")
-        if len(winner_names) == 1:
-            winner_name = winner_names[0]
+        normalized_winners = _normalize_winner_names(winner_names)
+        if len(normalized_winners) == 1:
+            winner_name = normalized_winners[0]
             msg.setText(f"{winner_name} wins ${winnings}!\n\nPlay again?")
         else:
-            msg.setText(f"Tie between {', '.join(winner_names)}! Each wins ${winnings/len(winner_names)}!\n\nPlay again?")
+            split_amount = winnings // len(normalized_winners) if normalized_winners else 0
+            msg.setText(
+                f"Tie between {', '.join(normalized_winners)}! "
+                f"Each wins ${split_amount}!\n\nPlay again?"
+            )
         msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
         msg.setDefaultButton(QMessageBox.Yes)
         result = msg.exec_()
@@ -2292,9 +2337,8 @@ class ThirteenCardPokerGameScreen(QWidget):
         self.pot_label = QLabel("Pot: 0")
         self.pot_label.setFont(QFont('Arial', 14))
         self.pot_label.setAlignment(Qt.AlignCenter)
-        self.chips_widget = QLabel("CHIPS PLACEHOLDER")
-        self.chips_widget.setMinimumSize(200, 40)
-        self.chips_widget.setStyleSheet("background: #bbb; border: 2px solid #888; border-radius: 8px;")
+        self.chips_widget = ChipsVisualWidget(self)
+        self.chips_widget.setMinimumSize(220, 90)
 
         center_col_layout.addWidget(self.pot_label, alignment=Qt.AlignCenter)
         center_col_layout.addSpacing(8)
@@ -2386,6 +2430,10 @@ class ThirteenCardPokerGameScreen(QWidget):
 
         try:
             self.pot_label.setText("Pot: 0")
+        except Exception:
+            pass
+        try:
+            self.chips_widget.set_amount(0)
         except Exception:
             pass
 
@@ -2714,6 +2762,10 @@ class ThirteenCardPokerGameScreen(QWidget):
     
     def update_pot(self, amount):
         self.pot_label.setText(f"Pot: {amount}")
+        try:
+            self.chips_widget.set_amount(amount)
+        except Exception:
+            pass
 
     def update_bot_bet(self, bot_index, amount):
         # bot_index: 0 for Bot1, 1 for Bot2, 2 for Bot3
@@ -2885,18 +2937,17 @@ class ThirteenCardPokerGameScreen(QWidget):
     def show_game_result_prompt(self, winner_names, winnings):
         msg = QMessageBox(self)
         msg.setWindowTitle("Game Over")
-        if isinstance(winner_names, str):
-            winner_names = [winner_names]
+        normalized_winners = _normalize_winner_names(winner_names)
 
-        if len(winner_names) > 1:
-            split_amount = winnings // len(winner_names)
+        if len(normalized_winners) > 1:
+            split_amount = winnings // len(normalized_winners)
             msg.setText(
-                f"Tie between {', '.join(winner_names)}.\n"
+                f"Tie between {', '.join(normalized_winners)}.\n"
                 f"Pot is split: ${split_amount} each.\n\n"
                 f"Play again?"
             )
         else:
-            winner_name = winner_names[0] if winner_names else "Winner"
+            winner_name = normalized_winners[0] if normalized_winners else "Winner"
             msg.setText(f"{winner_name} wins ${winnings}!\n\nPlay again?")
         msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
         msg.setDefaultButton(QMessageBox.Yes)
