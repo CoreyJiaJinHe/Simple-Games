@@ -63,11 +63,20 @@ class BoardOverlay(QWidget):
 
 
 class Snakes_And_Ladder:
-    def __init__(self, board_size: int, snakes: int, ladders: int):
+    def __init__(self, board_size: int, snakes: int, ladders: int, player_names=None):
         self.board_size = board_size
         self.generate_board(snakes, ladders)
-        self.player_position = 0
-        self.bot_position = 0
+        self.player_names = list(player_names) if player_names else ["Player", "Bot1", "Bot2", "Bot3"]
+        if not self.player_names:
+            self.player_names = ["Player"]
+        self.positions = {name: 0 for name in self.player_names}
+        self._sync_compat_positions()
+
+    def _sync_compat_positions(self):
+        # Backward-compatible attributes used by earlier 2-player code paths.
+        self.player_position = self.positions.get("Player", 0)
+        first_bot = next((name for name in self.player_names if name != "Player"), None)
+        self.bot_position = self.positions.get(first_bot, 0) if first_bot else 0
 
     def generate_board(self, snakes: int, ladders: int):
         # Generate the board as a linked list of positions 0..board_size-1.
@@ -127,38 +136,30 @@ class Snakes_And_Ladder:
         return new_position
 
     def check_winner(self):
-        if self.player_position >= self.board_size - 1:
-            return "Player"
-        if self.bot_position >= self.board_size - 1:
-            return "Bot"
+        for name in self.player_names:
+            if self.positions.get(name, 0) >= self.board_size - 1:
+                return name
         return None
 
     # -------- CLI helpers --------
     def play_turn(self, player: str):
         dice_roll = self.dice_roll()
         print(f"{player} rolled a {dice_roll}")
-        if player == "Player":
-            self.player_position = self.move(self.player_position, dice_roll)
-            print(f"Player is now at position {self.player_position}")
-        else:
-            self.bot_position = self.move(self.bot_position, dice_roll)
-            print(f"Bot is now at position {self.bot_position}")
+        old_pos = self.positions.get(player, 0)
+        self.positions[player] = self.move(old_pos, dice_roll)
+        self._sync_compat_positions()
+        print(f"{player} is now at position {self.positions[player]}")
 
     def play_game(self):
         count = 1
         while True:
             print("Turn:", count)
-            self.play_turn("Player")
-            winner = self.check_winner()
-            if winner:
-                print(f"{winner} wins!")
-                break
-
-            self.play_turn("Bot")
-            winner = self.check_winner()
-            if winner:
-                print(f"{winner} wins!")
-                break
+            for name in self.player_names:
+                self.play_turn(name)
+                winner = self.check_winner()
+                if winner:
+                    print(f"{winner} wins!")
+                    return
 
             count += 1
             if count == 200:
@@ -189,11 +190,13 @@ class Snakes_And_Ladder:
 
 
 class SnLGUI(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, disable_popups=False, include_player=True):
         super().__init__(parent)
         self.setWindowTitle("Snakes and Ladders")
         self.setMinimumSize(850, 700)
 
+        self.disable_popups = bool(disable_popups)
+        self.include_player = bool(include_player)
         self.game = None
         self._snake_heads = {}
         self._ladder_bases = {}
@@ -201,7 +204,16 @@ class SnLGUI(QWidget):
         self._columns = 10
         self._rows = 0
         self._auto_running = False
-        self._next_actor = "Player"
+        self._turn_order = self._build_turn_order()
+        self._next_actor_index = 0
+        self._marker_text = self._build_marker_text()
+        self._marker_border = {
+            "Player": "#0d6efd",
+            "Bot1": "#ff8c00",
+            "Bot2": "#6f42c1",
+            "Bot3": "#17a2b8",
+            "Bot4": "#495057",
+        }
         self._turn_delay_ms = 750
 
         self._build_ui()
@@ -240,6 +252,22 @@ class SnLGUI(QWidget):
         root.addWidget(self.board_scroll)
         self.setLayout(root)
 
+    def _build_turn_order(self):
+        if self.include_player:
+            return ["Player", "Bot1", "Bot2", "Bot3"]
+        return ["Bot1", "Bot2", "Bot3", "Bot4"]
+
+    def _build_marker_text(self):
+        mapping = {}
+        bot_counter = 1
+        for name in self._turn_order:
+            if name == "Player":
+                mapping[name] = "P"
+            else:
+                mapping[name] = f"B{bot_counter}"
+                bot_counter += 1
+        return mapping
+
     def _ask_game_settings(self):
         board_size, ok = QInputDialog.getInt(self, "Board Size", "Board size:", 100, 20, 400)
         if not ok:
@@ -266,17 +294,22 @@ class SnLGUI(QWidget):
             return
 
         board_size, snakes, ladders = settings
-        self.game = Snakes_And_Ladder(board_size=board_size, snakes=snakes, ladders=ladders)
+        self.game = Snakes_And_Ladder(
+            board_size=board_size,
+            snakes=snakes,
+            ladders=ladders,
+            player_names=self._turn_order,
+        )
         self._extract_special_positions()
         self._build_board_cells()
         self._render_board()
 
-        self._next_actor = "Player"
+        self._next_actor_index = 0
         self.roll_button.setEnabled(True)
         self.start_button.setText("New Game")
         self.status_label.setText(
             f"Board ready: size={board_size}, snakes={len(self._snake_heads)}, ladders={len(self._ladder_bases)}. "
-            "Click Roll Dice once to start autoplay turns."
+            f"Players: {', '.join(self._turn_order)}. Click Roll Dice once to start autoplay turns."
         )
 
     def on_roll_clicked(self):
@@ -284,7 +317,7 @@ class SnLGUI(QWidget):
             return
 
         self._auto_running = True
-        self._next_actor = "Player"
+        self._next_actor_index = 0
         self.roll_button.setEnabled(False)
         self.start_button.setEnabled(False)
         self.status_label.setText("Autoplay started. Turns will play slowly with dice popups.")
@@ -294,19 +327,14 @@ class SnLGUI(QWidget):
         if not self._auto_running or self.game is None:
             return
 
-        actor = self._next_actor
+        actor = self._turn_order[self._next_actor_index]
         roll = self.game.dice_roll()
 
-        if actor == "Player":
-            old_pos = self.game.player_position
-            proposed = old_pos + roll
-            new_pos = self.game.move(old_pos, roll)
-            self.game.player_position = new_pos
-        else:
-            old_pos = self.game.bot_position
-            proposed = old_pos + roll
-            new_pos = self.game.move(old_pos, roll)
-            self.game.bot_position = new_pos
+        old_pos = self.game.positions.get(actor, 0)
+        proposed = old_pos + roll
+        new_pos = self.game.move(old_pos, roll)
+        self.game.positions[actor] = new_pos
+        self.game._sync_compat_positions()
 
         transition = "normal"
         if proposed > self.game.board_size - 1:
@@ -328,14 +356,18 @@ class SnLGUI(QWidget):
             QMessageBox.information(self, "Game Over", f"{winner} wins!")
             return
 
-        self._next_actor = "Bot" if actor == "Player" else "Player"
+        self._next_actor_index = (self._next_actor_index + 1) % len(self._turn_order)
+        next_actor = self._turn_order[self._next_actor_index]
         self.status_label.setText(
             f"Last turn: {actor} rolled {roll} and moved {old_pos} -> {new_pos}. "
-            f"Next turn: {self._next_actor}."
+            f"Next turn: {next_actor}."
         )
         QTimer.singleShot(self._turn_delay_ms, self._play_next_turn)
 
     def _show_dice_popup(self, actor, roll, old_pos, proposed, new_pos, transition):
+        if self.disable_popups:
+            return
+
         if transition == "snake":
             detail = f"Landed on a snake: {proposed} -> {new_pos}"
         elif transition == "ladder":
@@ -466,8 +498,7 @@ class SnLGUI(QWidget):
             return
 
         last_position = self.game.board_size - 1
-        player_pos = self.game.player_position
-        bot_pos = self.game.bot_position
+        positions = self.game.positions
 
         for pos, label in self._board_labels.items():
             lines = [str(pos)]
@@ -480,13 +511,9 @@ class SnLGUI(QWidget):
             elif pos in self._ladder_bases:
                 lines.append(f"L->{self._ladder_bases[pos]}")
 
-            occupants = []
-            if pos == player_pos:
-                occupants.append("P")
-            if pos == bot_pos:
-                occupants.append("B")
+            occupants = [name for name in self._turn_order if positions.get(name, 0) == pos]
             if occupants:
-                lines.append("/".join(occupants))
+                lines.append("/".join(self._marker_text.get(name, name[:2]) for name in occupants))
 
             if pos in self._snake_heads:
                 bg = "#ffd6d6"
@@ -495,12 +522,10 @@ class SnLGUI(QWidget):
             else:
                 bg = "#f3f3f3"
 
-            if pos == player_pos and pos == bot_pos:
+            if len(occupants) > 1:
                 border = "3px solid #6f42c1"
-            elif pos == player_pos:
-                border = "3px solid #0d6efd"
-            elif pos == bot_pos:
-                border = "3px solid #ff8c00"
+            elif len(occupants) == 1:
+                border = f"3px solid {self._marker_border.get(occupants[0], '#343a40')}"
             else:
                 border = "1px solid #9c9c9c"
 
@@ -527,22 +552,35 @@ def _read_int_with_default(prompt, default, min_value):
     return max(min_value, value)
 
 
-def run_cli_game():
+def run_cli_game(include_player=True):
     print("Snakes and Ladders (CLI)")
     board_size = _read_int_with_default("Board size", 100, 20)
     snakes = _read_int_with_default("Number of snakes", 10, 0)
     ladders = _read_int_with_default("Number of ladders", 10, 0)
 
-    game = Snakes_And_Ladder(board_size=board_size, snakes=snakes, ladders=ladders)
+    player_names = ["Player", "Bot1", "Bot2", "Bot3"] if include_player else ["Bot1", "Bot2", "Bot3", "Bot4"]
+
+    game = Snakes_And_Ladder(
+        board_size=board_size,
+        snakes=snakes,
+        ladders=ladders,
+        player_names=player_names,
+    )
     game.debug_print_board_v2()
     game.play_game()
 
 
 if __name__ == "__main__":
-    if "--cli" in sys.argv:
-        run_cli_game()
+    include_player = False
+    disable_popups = True
+    run_cli = False
+    if run_cli:
+        run_cli_game(include_player=include_player)
     else:
         app = QApplication([])
-        window = SnLGUI()
+        window = SnLGUI(
+            disable_popups=disable_popups,
+            include_player=include_player,
+        )
         window.show()
         app.exec_()
