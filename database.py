@@ -1,5 +1,29 @@
 import sqlite3
 
+try:
+    import sys
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import (
+        QApplication,
+        QComboBox,
+        QGridLayout,
+        QGroupBox,
+        QHBoxLayout,
+        QLabel,
+        QScrollArea,
+        QSizePolicy,
+        QTableWidget,
+        QTableWidgetItem,
+        QTabWidget,
+        QVBoxLayout,
+        QWidget,
+    )
+    from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+    from matplotlib.figure import Figure
+    VISUALIZER_IMPORT_ERROR = None
+except ImportError as visualizer_import_error:
+    VISUALIZER_IMPORT_ERROR = visualizer_import_error
+
 class PlayerNotFoundError(Exception):
     def __init__(self, player_name=None, operation=None):
         base_message = "Player not found in database"
@@ -135,6 +159,36 @@ class gameDatabase:
         self.cursor.execute('SELECT username, wallet, WINNINGS_TOTAL FROM players')
         return self.cursor.fetchall()
 
+    @staticmethod
+    def _escape_identifier(identifier):
+        return str(identifier).replace('"', '""')
+
+    def get_table_names(self):
+        self.cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;")
+        return [row[0] for row in self.cursor.fetchall()]
+
+    def get_table_columns(self, table_name):
+        safe_table_name = self._escape_identifier(table_name)
+        self.cursor.execute(f'PRAGMA table_info("{safe_table_name}");')
+        return [row[1] for row in self.cursor.fetchall()]
+
+    def get_table_records(self, table_name):
+        safe_table_name = self._escape_identifier(table_name)
+        self.cursor.execute(f'SELECT * FROM "{safe_table_name}";')
+        return self.cursor.fetchall()
+
+    def get_all_tables_with_records(self):
+        tables_with_records = []
+        for table_name in self.get_table_names():
+            table_columns = self.get_table_columns(table_name)
+            table_rows = self.get_table_records(table_name)
+            tables_with_records.append({
+                'name': table_name,
+                'columns': table_columns,
+                'rows': table_rows,
+            })
+        return tables_with_records
+
     def add_player(self, username):
         try:
             self.cursor.execute('''INSERT INTO players (username, wallet, games_played, games_won, WINNINGS_TOTAL) 
@@ -188,7 +242,6 @@ class gameDatabase:
                             (loan_amount, loan_amount, username))
         self.conn.commit()
 
-
 class DatabaseVisualizer:
     def __init__(self, database):
         self.database = database
@@ -215,6 +268,14 @@ class DatabaseVisualizer:
             return f"{count} ({pct:.1f}%)"
 
         return formatter
+
+    @staticmethod
+    def _ensure_visualizer_dependencies():
+        if VISUALIZER_IMPORT_ERROR is not None:
+            print(f'Visualizer dependencies missing: {VISUALIZER_IMPORT_ERROR}')
+            print('Install requirements with: pip install PyQt5 matplotlib')
+            return False
+        return True
 
     def _fetch_game_logs(self, game_type_filter=None):
         return self.database.get_game_logs(game_type_filter=game_type_filter)
@@ -486,7 +547,8 @@ class DatabaseVisualizer:
         figure.tight_layout()
 
     def _build_summary_table_widget(self, game_type_filter=None):
-        from PyQt5.QtWidgets import QTableWidget, QTableWidgetItem
+        if not self._ensure_visualizer_dependencies():
+            return None
 
         summary_rows = self.get_player_summary_table(game_type_filter=game_type_filter)
         summary_table = QTableWidget()
@@ -510,29 +572,87 @@ class DatabaseVisualizer:
         summary_table.resizeColumnsToContents()
         return summary_table
 
+    def _build_database_tables_tab_widget(self):
+        if not self._ensure_visualizer_dependencies():
+            return None
+
+        def display_table_name(raw_table_name):
+            if raw_table_name == 'sqlite_sequence':
+                return 'Database Summary'
+            return raw_table_name
+
+        def display_column_name(raw_column_name):
+            if raw_column_name == 'seq':
+                return 'Number of Entries'
+            return raw_column_name
+
+        tab_root = QWidget()
+        root_layout = QVBoxLayout()
+        tab_root.setLayout(root_layout)
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        root_layout.addWidget(scroll_area)
+
+        scroll_content = QWidget()
+        scroll_layout = QGridLayout()
+        scroll_layout.setHorizontalSpacing(12)
+        scroll_layout.setVerticalSpacing(12)
+        scroll_content.setLayout(scroll_layout)
+        scroll_area.setWidget(scroll_content)
+
+        tables_with_records = self.database.get_all_tables_with_records()
+        if not tables_with_records:
+            scroll_layout.addWidget(QLabel('No tables found in the database.'), 0, 0)
+            return tab_root
+
+        for index, table_data in enumerate(tables_with_records):
+            grid_row = index // 2
+            grid_col = index % 2
+
+            table_name = table_data['name']
+            displayed_table_name = display_table_name(table_name)
+            table_columns = table_data['columns']
+            table_rows = table_data['rows']
+
+            panel = QGroupBox(f"{displayed_table_name} ({len(table_rows)} rows)")
+            panel_layout = QVBoxLayout()
+
+            records_table = QTableWidget()
+            records_table.setAlternatingRowColors(True)
+            records_table.setColumnCount(len(table_columns))
+            records_table.setHorizontalHeaderLabels([display_column_name(str(column)) for column in table_columns])
+            records_table.setRowCount(len(table_rows))
+            records_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            records_table.setMinimumHeight(230)
+            records_table.setMaximumHeight(320)
+
+            for row_index, row_data in enumerate(table_rows):
+                for col_index, column_name in enumerate(table_columns):
+                    cell_value = row_data[column_name] if column_name in row_data.keys() else ''
+                    cell_text = 'NULL' if cell_value is None else str(cell_value)
+                    records_table.setItem(row_index, col_index, QTableWidgetItem(cell_text))
+
+            records_table.horizontalHeader().setStretchLastSection(True)
+            records_table.resizeColumnsToContents()
+            records_table.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            records_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+            panel_layout.addWidget(records_table)
+            panel.setLayout(panel_layout)
+            scroll_layout.addWidget(panel, grid_row, grid_col)
+
+        scroll_layout.setColumnStretch(0, 1)
+        scroll_layout.setColumnStretch(1, 1)
+        return tab_root
+
     def show_data_visualizer(self, save_path=None, show=True, game_type_filter=None):
         selectable_players = self.get_selectable_players()
         if not selectable_players:
             print('No players available for visualization.')
             return None
 
-        try:
-            import sys
-            from PyQt5.QtWidgets import (
-                QApplication,
-                QComboBox,
-                QGridLayout,
-                QGroupBox,
-                QHBoxLayout,
-                QLabel,
-                QVBoxLayout,
-                QWidget,
-            )
-            from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-            from matplotlib.figure import Figure
-        except ImportError as exc:
-            print(f'Visualizer dependencies missing: {exc}')
-            print('Install requirements with: pip install PyQt5 matplotlib')
+        if not self._ensure_visualizer_dependencies():
             return None
 
         if not show:
@@ -551,9 +671,17 @@ class DatabaseVisualizer:
                 self.setWindowTitle('Game Data Visualizer')
                 self.resize(1400, 960)
 
+                main_layout = QVBoxLayout()
+                self.setLayout(main_layout)
+
+                tab_widget = QTabWidget()
+                main_layout.addWidget(tab_widget)
+
+                analytics_tab = QWidget()
                 root_layout = QGridLayout()
                 root_layout.setHorizontalSpacing(14)
                 root_layout.setVerticalSpacing(14)
+                analytics_tab.setLayout(root_layout)
 
                 self.game_type_panel, self.game_type_combo, self.game_type_figure, self.game_type_canvas = self._create_chart_panel(
                     'Game Type Distribution',
@@ -580,7 +708,9 @@ class DatabaseVisualizer:
                 root_layout.addWidget(self.win_loss_panel, 0, 1)
                 root_layout.addWidget(self.losses_panel, 1, 0)
                 root_layout.addWidget(summary_panel, 1, 1)
-                self.setLayout(root_layout)
+
+                tab_widget.addTab(analytics_tab, 'Analytics')
+                tab_widget.addTab(self.visualizer._build_database_tables_tab_widget(), 'Database Tables')
 
                 # Initial rendering for each independent chart/player selector.
                 self._on_game_type_player_changed(self.game_type_combo.currentText())
