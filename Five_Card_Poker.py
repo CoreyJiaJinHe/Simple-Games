@@ -203,6 +203,76 @@ class FiveCardPoker():
         return result
     
     def bot_set_bet(self, bot_player: Player, to_call, round_number):
+        '''
+        FUNCTION: bot_set_bet(bot_player, to_call, round_number)
+
+        STEP 1: Hard exits
+        - If bot_player.wallet <= 0:
+        -> return (skip turn)
+        - If bot_player.isFolded:
+        -> return (skip turn)
+
+        STEP 2: Normalize call amount
+        - required_to_call = max(0, int(to_call))
+        - wager = None
+        - If required_to_call == 0:
+        -> return (no bet needed)
+
+        STEP 3: Round 1 behavior
+        - If round_number == 1:
+        -> wager = min(required_to_call, bot_player.wallet)
+        -> go to STEP 7 (apply wager)
+
+        STEP 4: Later rounds (round_number != 1)
+        - hand_strength = bot_assess_hand_strength(...)
+        - bot_determine_maximum_bet(...)
+        - maximum_bet is now available on bot_player
+
+        STEP 5: If required call exceeds wallet (all-in pressure)
+        - If to_call > bot_player.wallet:
+        - If hand_strength <= 1:
+            -> fold (isFolded=True), return
+        - Else (hand_strength > 1):
+            -> wager = bot_player.wallet (all-in)
+            -> go to STEP 7
+
+        STEP 6: If required call is within wallet
+        - remaining_allowable = max(0, maximum_bet - bot_player.current_bet)
+
+        A) If required_to_call > remaining_allowable:
+        A1) If required_to_call <= remaining_allowable * 1.5:
+            - If hand_strength <= 1:
+                -> fold, return
+            - Else:
+                -> wager = required_to_call (call)
+        A2) Else (too far above willingness):
+            - 10% bluff chance:
+                - If random > 0.9:
+                -> wager = required_to_call (call)
+                - Else:
+                -> fold, return
+
+        B) Else (required_to_call <= remaining_allowable):
+        B1) If required_to_call > maximum_bet:
+            -> fold, return
+        B2) Else if low risk and current_bet >= 50% of maximum_bet:
+            -> wager = required_to_call (call)
+        B3) Else if medium risk and current_bet >= 70% of maximum_bet:
+            -> wager = random.randint(required_to_call, upper_bound_70)
+        B4) Else:
+            -> wager = random.randint(required_to_call, upper_bound_max)
+
+        STEP 7: Apply wager
+        - If wager is not None:
+        -> bot_player.add_to_bet(wager)
+        -> log "called" if wager == required_to_call
+        -> else log "raised"
+        '''
+        
+        
+        
+        
+        
         #---------------------------------
         #Cannot Continue Playing Scenarios
         #---------------------------------
